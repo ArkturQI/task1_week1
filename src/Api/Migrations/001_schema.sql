@@ -3,8 +3,12 @@ CREATE SCHEMA IF NOT EXISTS api;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'course_runtime') THEN CREATE ROLE course_runtime NOLOGIN; END IF;
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'course_api') THEN CREATE ROLE course_api NOLOGIN; END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'course_runtime') THEN
+        CREATE ROLE course_runtime NOLOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'course_api') THEN
+        CREATE ROLE course_api NOLOGIN;
+    END IF;
 END $$;
 
 GRANT USAGE ON SCHEMA autocheck TO course_runtime;
@@ -12,12 +16,11 @@ GRANT USAGE ON SCHEMA autocheck TO course_api;
 GRANT USAGE ON SCHEMA api TO course_runtime;
 GRANT USAGE ON SCHEMA api TO course_api;
 
--- Контрактная таблица contract_info (сразу с _tbl)
-CREATE TABLE IF NOT EXISTS autocheck.contract_info_tbl (
+CREATE TABLE IF NOT EXISTS autocheck.contract_info (
     contract_version text PRIMARY KEY,
     generated_at     timestamptz NOT NULL DEFAULT now()
 );
-INSERT INTO autocheck.contract_info_tbl (contract_version) VALUES ('course-1') ON CONFLICT DO NOTHING;
+INSERT INTO autocheck.contract_info (contract_version) VALUES ('course-1') ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS autocheck.schema_migrations (
     file_name  text PRIMARY KEY,
@@ -25,8 +28,7 @@ CREATE TABLE IF NOT EXISTS autocheck.schema_migrations (
     applied_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Физические таблицы сразу с _tbl
-CREATE TABLE IF NOT EXISTS autocheck.action_definitions_tbl (
+CREATE TABLE IF NOT EXISTS autocheck.action_definitions (
     id              bigserial PRIMARY KEY,
     module          text NOT NULL,
     action          text NOT NULL,
@@ -43,7 +45,7 @@ CREATE TABLE IF NOT EXISTS autocheck.action_definitions_tbl (
     UNIQUE (module, action, version)
 );
 
-CREATE TABLE IF NOT EXISTS autocheck.action_dispatches_tbl (
+CREATE TABLE IF NOT EXISTS autocheck.action_dispatches (
     id             bigserial PRIMARY KEY,
     module         text NOT NULL,
     action         text NOT NULL,
@@ -56,10 +58,10 @@ CREATE TABLE IF NOT EXISTS autocheck.action_dispatches_tbl (
     outcome        text,
     occurred_at    timestamptz NOT NULL DEFAULT clock_timestamp()
 );
-CREATE INDEX IF NOT EXISTS ix_dispatches_route ON autocheck.action_dispatches_tbl (module, action);
-CREATE INDEX IF NOT EXISTS ix_dispatches_request ON autocheck.action_dispatches_tbl (request_id);
+CREATE INDEX IF NOT EXISTS ix_dispatches_route ON autocheck.action_dispatches (module, action);
+CREATE INDEX IF NOT EXISTS ix_dispatches_request ON autocheck.action_dispatches (request_id);
 
-CREATE TABLE IF NOT EXISTS autocheck.operations_tbl (
+CREATE TABLE IF NOT EXISTS autocheck.operations (
     operation_id    uuid PRIMARY KEY,
     request_id      text NOT NULL,
     idempotency_key text NOT NULL,
@@ -79,9 +81,9 @@ CREATE TABLE IF NOT EXISTS autocheck.operations_tbl (
     created_at      timestamptz NOT NULL DEFAULT clock_timestamp(),
     updated_at      timestamptz NOT NULL DEFAULT clock_timestamp()
 );
-CREATE INDEX IF NOT EXISTS ix_operations_scope_key ON autocheck.operations_tbl (scope_key, idempotency_key);
+CREATE INDEX IF NOT EXISTS ix_operations_scope_key ON autocheck.operations (scope_key, idempotency_key);
 
-CREATE TABLE IF NOT EXISTS autocheck.operation_events_tbl (
+CREATE TABLE IF NOT EXISTS autocheck.operation_events (
     event_id     uuid PRIMARY KEY,
     operation_id uuid NOT NULL,
     event_type   text NOT NULL,
@@ -89,14 +91,17 @@ CREATE TABLE IF NOT EXISTS autocheck.operation_events_tbl (
     occurred_at  timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
--- КРИТИЧНО: права для course_api (владельца SECURITY DEFINER функций)
 GRANT SELECT, INSERT, UPDATE, DELETE ON
-    autocheck.contract_info_tbl,
-    autocheck.action_definitions_tbl,
-    autocheck.action_dispatches_tbl,
-    autocheck.operations_tbl,
-    autocheck.operation_events_tbl
+    autocheck.contract_info,
+    autocheck.action_definitions,
+    autocheck.action_dispatches,
+    autocheck.operations,
+    autocheck.operation_events
 TO course_api;
 
--- sequence для bigserial PRIMARY KEY
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA autocheck TO course_api;
+
+REVOKE ALL ON autocheck.operations FROM course_runtime;
+REVOKE ALL ON autocheck.operation_events FROM course_runtime;
+GRANT SELECT ON autocheck.contract_info, autocheck.action_definitions, autocheck.action_dispatches TO course_runtime;
+GRANT SELECT ON autocheck.operations, autocheck.operation_events TO course_runtime;

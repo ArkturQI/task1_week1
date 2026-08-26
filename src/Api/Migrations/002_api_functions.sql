@@ -49,9 +49,9 @@ DECLARE
     v_correlation uuid; v_msg text; v_op_id uuid; v_idempotency_scope text;
 BEGIN
     IF p_version IS NOT NULL THEN
-        SELECT * INTO v_def FROM autocheck.action_definitions_tbl d WHERE d.module = p_module AND d.action = p_action AND d.version = p_version AND d.enabled;
+        SELECT * INTO v_def FROM autocheck.action_definitions d WHERE d.module = p_module AND d.action = p_action AND d.version = p_version AND d.enabled;
     ELSE
-        SELECT * INTO v_def FROM autocheck.action_definitions_tbl d WHERE d.module = p_module AND d.action = p_action AND d.enabled AND d.is_default;
+        SELECT * INTO v_def FROM autocheck.action_definitions d WHERE d.module = p_module AND d.action = p_action AND d.enabled AND d.is_default;
     END IF;
 
     IF NOT FOUND THEN
@@ -90,13 +90,13 @@ BEGIN
     END CASE;
 
     IF v_key IS NOT NULL THEN
-        SELECT o.result, o.payload_hash INTO v_stored, v_stored_hash FROM autocheck.operations_tbl o WHERE o.scope_key = v_scope_key AND o.idempotency_key = v_key;
+        SELECT o.result, o.payload_hash INTO v_stored, v_stored_hash FROM autocheck.operations o WHERE o.scope_key = v_scope_key AND o.idempotency_key = v_key;
         IF FOUND THEN
             IF v_stored_hash <> v_payload_hash THEN
                 RETURN jsonb_build_object('status', 'error', 'code', 'idempotency.conflict', 'message', 'same key with different payload',
                     'meta', jsonb_build_object('correlationId', coalesce(p_context ->> 'correlationId', gen_random_uuid()::text), 'actionVersion', v_def.version));
             END IF;
-            INSERT INTO autocheck.action_dispatches_tbl (module, action, version, request_id, correlation_id, principal, payload_hash, status, outcome, occurred_at)
+            INSERT INTO autocheck.action_dispatches (module, action, version, request_id, correlation_id, principal, payload_hash, status, outcome, occurred_at)
             VALUES (p_module, p_action, v_def.version, v_key, (v_stored -> 'meta' ->> 'correlationId')::uuid, coalesce(p_context ->> 'principal', ''), v_payload_hash, 'OK', v_stored ->> 'outcome', clock_timestamp());
             RETURN v_stored;
         END IF;
@@ -122,16 +122,16 @@ BEGIN
 
         BEGIN v_op_id := (v_result -> 'result' ->> 'operationId')::uuid; EXCEPTION WHEN OTHERS THEN v_op_id := gen_random_uuid(); END;
 
-        INSERT INTO autocheck.action_dispatches_tbl (module, action, version, request_id, correlation_id, principal, payload_hash, status, outcome, occurred_at)
+        INSERT INTO autocheck.action_dispatches (module, action, version, request_id, correlation_id, principal, payload_hash, status, outcome, occurred_at)
         VALUES (p_module, p_action, v_def.version, coalesce(v_key, p_context ->> 'requestId', gen_random_uuid()::text), v_correlation, coalesce(p_context ->> 'principal', ''), v_payload_hash, 'OK', v_result ->> 'outcome', clock_timestamp());
 
         IF v_key IS NOT NULL THEN
-            INSERT INTO autocheck.operations_tbl (operation_id, request_id, idempotency_key, scope_key, module, action, version, operation_kind, status, amount, currency, payload, payload_hash, outcome, result)
+            INSERT INTO autocheck.operations (operation_id, request_id, idempotency_key, scope_key, module, action, version, operation_kind, status, amount, currency, payload, payload_hash, outcome, result)
             VALUES (coalesce(v_op_id, gen_random_uuid()), coalesce(v_key, p_context ->> 'requestId', gen_random_uuid()::text), v_key, v_scope_key, p_module, p_action, v_def.version,
                     v_result -> 'result' ->> 'operationKind', v_result ->> 'outcome', (v_result -> 'result' ->> 'amount')::numeric, v_result -> 'result' ->> 'currency',
                     p_payload, v_payload_hash, v_result ->> 'outcome', v_final)
             ON CONFLICT (scope_key, idempotency_key) DO NOTHING;
-            IF NOT FOUND THEN SELECT o.result INTO v_final FROM autocheck.operations_tbl o WHERE o.scope_key = v_scope_key AND o.idempotency_key = v_key; END IF;
+            IF NOT FOUND THEN SELECT o.result INTO v_final FROM autocheck.operations o WHERE o.scope_key = v_scope_key AND o.idempotency_key = v_key; END IF;
         END IF;
     EXCEPTION WHEN OTHERS THEN
         GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
@@ -167,7 +167,7 @@ BEGIN
     v_payload_hash := encode(digest(convert_to(p_payload::text, 'UTF8'), 'sha256'), 'hex');
     v_op_id := gen_random_uuid();
 
-    INSERT INTO autocheck.operation_events_tbl (event_id, operation_id, event_type, payload_hash, occurred_at)
+    INSERT INTO autocheck.operation_events (event_id, operation_id, event_type, payload_hash, occurred_at)
     VALUES (gen_random_uuid(), v_op_id, 'OPERATION_CREATED', v_payload_hash, clock_timestamp());
 
     RETURN jsonb_build_object('status', 'ok', 'outcome', 'CREATED', 'result', jsonb_build_object(
@@ -185,7 +185,7 @@ BEGIN
         RETURN jsonb_build_object('status', 'error', 'code', 'payload.invalid', 'message', 'operationId must be a string'); END IF;
     BEGIN v_op_id := (p_payload ->> 'operationId')::uuid; EXCEPTION WHEN OTHERS THEN
         RETURN jsonb_build_object('status', 'error', 'code', 'payload.invalid', 'message', 'operationId is not a uuid'); END;
-    SELECT * INTO v_op FROM autocheck.operations_tbl WHERE operation_id = v_op_id;
+    SELECT * INTO v_op FROM autocheck.operations WHERE operation_id = v_op_id;
     IF NOT FOUND THEN RETURN jsonb_build_object('status', 'error', 'code', 'operation.not_found', 'message', 'operation not found'); END IF;
     RETURN jsonb_build_object('status', 'ok', 'outcome', 'FOUND', 'result', jsonb_build_object(
         'operationId', v_op.operation_id, 'requestId', v_op.request_id, 'operationKind', v_op.operation_kind,
