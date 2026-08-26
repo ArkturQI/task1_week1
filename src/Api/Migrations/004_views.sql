@@ -1,9 +1,11 @@
-﻿ALTER TABLE IF EXISTS autocheck.contract_info RENAME TO contract_info_tbl;
+﻿-- 1. Переименовываем физические таблицы, освобождая имена для VIEW
+ALTER TABLE IF EXISTS autocheck.contract_info RENAME TO contract_info_tbl;
 ALTER TABLE IF EXISTS autocheck.action_definitions RENAME TO action_definitions_tbl;
 ALTER TABLE IF EXISTS autocheck.action_dispatches RENAME TO action_dispatches_tbl;
 ALTER TABLE IF EXISTS autocheck.operations RENAME TO operations_tbl;
 ALTER TABLE IF EXISTS autocheck.operation_events RENAME TO operation_events_tbl;
 
+-- 2. Создаём VIEW с правильными именами
 CREATE OR REPLACE VIEW autocheck.contract_info AS
 SELECT contract_version, generated_at FROM autocheck.contract_info_tbl;
 
@@ -23,6 +25,7 @@ CREATE OR REPLACE VIEW autocheck.operation_events AS
 SELECT event_id, operation_id, event_type, payload_hash, occurred_at
 FROM autocheck.operation_events_tbl;
 
+-- 3. Права для course_api (владельца SECURITY DEFINER функций)
 GRANT USAGE ON SCHEMA autocheck TO course_api;
 GRANT SELECT, INSERT, UPDATE, DELETE ON
     autocheck.contract_info_tbl,
@@ -32,7 +35,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
     autocheck.operation_events_tbl
 TO course_api;
 
-
+-- 4. course_runtime: только чтение VIEW
 REVOKE ALL ON
     autocheck.contract_info_tbl,
     autocheck.action_definitions_tbl,
