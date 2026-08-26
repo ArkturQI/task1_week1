@@ -79,9 +79,9 @@ CREATE TABLE IF NOT EXISTS autocheck.operations (
     outcome         text,
     result          jsonb,
     created_at      timestamptz NOT NULL DEFAULT clock_timestamp(),
-    updated_at      timestamptz NOT NULL DEFAULT clock_timestamp()
+    updated_at      timestamptz NOT NULL DEFAULT clock_timestamp(),
+    UNIQUE (scope_key, idempotency_key)
 );
-CREATE INDEX IF NOT EXISTS ix_operations_scope_key ON autocheck.operations (scope_key, idempotency_key);
 
 CREATE TABLE IF NOT EXISTS autocheck.operation_events (
     event_id     uuid PRIMARY KEY,
