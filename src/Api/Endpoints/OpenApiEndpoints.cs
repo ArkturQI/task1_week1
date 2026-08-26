@@ -97,12 +97,12 @@ public static class OpenApiEndpoints
         var list = new List<ActionDef>();
         await using var conn = new NpgsqlConnection(connStr);
         await conn.OpenAsync(ct);
+        // ИСПРАВЛЕНО: убрано _tbl
         await using var cmd = new NpgsqlCommand(
-            "SELECT module, action, version, manifest::text, enabled, is_default FROM autocheck.action_definitions_tbl ORDER BY module, action, version", conn);
+            "SELECT module, action, version, manifest::text, enabled, is_default FROM autocheck.action_definitions ORDER BY module, action, version", conn);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            // УБРАНО СЛОВО 'using'
             var manifest = JsonDocument.Parse(reader.GetString(3));
             list.Add(new ActionDef
             {
@@ -112,8 +112,8 @@ public static class OpenApiEndpoints
                 Enabled = reader.GetBoolean(4),
                 IsDefault = reader.GetBoolean(5),
                 Manifest = manifest,
-                RequestSchema = manifest.RootElement.TryGetProperty("request_schema", out var rs) ? rs.Clone() : default,
-                ResponseSchema = manifest.RootElement.TryGetProperty("response_schema", out var ss) ? ss.Clone() : default
+                RequestSchema = manifest.RootElement.TryGetProperty("request_schema", out var reqProp) ? reqProp.Clone() : default,
+                ResponseSchema = manifest.RootElement.TryGetProperty("response_schema", out var resProp) ? resProp.Clone() : default
             });
         }
         return list;

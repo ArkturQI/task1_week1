@@ -39,9 +39,10 @@ public static class ActionEndpoints
             {
                 await using var conn = new NpgsqlConnection(connStr);
                 await conn.OpenAsync(ct);
+                // ИСПРАВЛЕНО: убрано _tbl
                 var sql = version.HasValue
-                    ? "SELECT module, action, version, manifest::text, enabled, is_default FROM autocheck.action_definitions_tbl WHERE module = @m AND action = @a AND version = @v AND enabled LIMIT 1"
-                    : "SELECT module, action, version, manifest::text, enabled, is_default FROM autocheck.action_definitions_tbl WHERE module = @m AND action = @a AND is_default = true AND enabled LIMIT 1";
+                    ? "SELECT module, action, version, manifest::text, enabled, is_default FROM autocheck.action_definitions WHERE module = @m AND action = @a AND version = @v AND enabled LIMIT 1"
+                    : "SELECT module, action, version, manifest::text, enabled, is_default FROM autocheck.action_definitions WHERE module = @m AND action = @a AND is_default = true AND enabled LIMIT 1";
                 await using var cmd = new NpgsqlCommand(sql, conn);
                 cmd.Parameters.AddWithValue("m", module);
                 cmd.Parameters.AddWithValue("a", action);
@@ -49,7 +50,6 @@ public static class ActionEndpoints
                 await using var reader = await cmd.ExecuteReaderAsync(ct);
                 if (await reader.ReadAsync(ct))
                 {
-                    // БЕЗ 'using', чтобы документ жил до конца запроса
                     var manifest = JsonDocument.Parse(reader.GetString(3));
                     actionDef = new ActionDef
                     {
@@ -59,7 +59,6 @@ public static class ActionEndpoints
                         Enabled = reader.GetBoolean(4),
                         IsDefault = reader.GetBoolean(5),
                         Manifest = manifest,
-                        // Используем уникальные имена для out var, чтобы избежать конфликтов
                         RequestSchema = manifest.RootElement.TryGetProperty("request_schema", out var reqProp) ? reqProp.Clone() : default,
                         ResponseSchema = manifest.RootElement.TryGetProperty("response_schema", out var resProp) ? resProp.Clone() : default
                     };
@@ -100,7 +99,6 @@ public static class ActionEndpoints
                     statusCode: 400);
             }
 
-            // БЕРЁМ УЖЕ СОХРАНЁННУЮ СХЕМУ, чтобы избежать повторного out var
             var requestSchema = actionDef.RequestSchema;
             if (requestSchema.ValueKind == JsonValueKind.Object)
             {
@@ -180,7 +178,6 @@ public static class ActionEndpoints
                         statusCode: 500);
                 }
 
-                // БЕРЁМ УЖЕ СОХРАНЁННУЮ СХЕМУ
                 var responseSchema = actionDef.ResponseSchema;
                 if (responseSchema.ValueKind == JsonValueKind.Object)
                 {
