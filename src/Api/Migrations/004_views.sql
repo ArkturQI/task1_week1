@@ -8,7 +8,7 @@ CREATE OR REPLACE VIEW autocheck.contract_info AS
 SELECT contract_version, generated_at FROM autocheck._contract_info_tbl;
 
 CREATE OR REPLACE VIEW autocheck.action_definitions AS
-SELECT module, action, version, http_method, target_schema, target_function, outcomes, enabled, is_default, manifest
+SELECT module, action, version, http_method, target_schema, target_function, outcomes, enabled, is_default, manifest, manifest_hash
 FROM autocheck._action_definitions_tbl;
 
 CREATE OR REPLACE VIEW autocheck.action_dispatches AS
