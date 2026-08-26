@@ -47,6 +47,11 @@ internal static class ManifestParser
         var enabled = !root.TryGetProperty("enabled", out var en) || en.ValueKind != JsonValueKind.False;
         var isDefault = root.TryGetProperty("is_default", out var id) && id.ValueKind == JsonValueKind.True;
 
+        var httpMethod = root.TryGetProperty("http_method", out var hm) && hm.ValueKind == JsonValueKind.String ? hm.GetString() : "POST";
+        var targetSchema = root.TryGetProperty("target_schema", out var ts) && ts.ValueKind == JsonValueKind.String ? ts.GetString() : "";
+        var targetFunction = root.TryGetProperty("target_function", out var tf) && tf.ValueKind == JsonValueKind.String ? tf.GetString() : "";
+        var outcomes = root.TryGetProperty("outcomes", out var o) && o.ValueKind == JsonValueKind.Array ? o.GetRawText() : "[]";
+
         info = new ManifestInfo
         {
             Module = module!,
@@ -56,7 +61,11 @@ internal static class ManifestParser
             Content = content,
             Enabled = enabled,
             IsDefault = isDefault,
-            ManifestSize = content.Length
+            ManifestSize = content.Length,
+            HttpMethod = httpMethod ?? "POST",
+            TargetSchema = targetSchema ?? "",
+            TargetFunction = targetFunction ?? "",
+            Outcomes = outcomes
         };
         error = null;
         return true;

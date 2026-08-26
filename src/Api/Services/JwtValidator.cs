@@ -42,10 +42,9 @@ public sealed class JwtValidator
                 ClockSkew = TimeSpan.FromSeconds(30)
             };
             handler.ValidateToken(token, validationParams, out var validatedToken);
-            return validatedToken as JwtSecurityToken
-                ?? throw new SecurityTokenException("token is not a JWT");
+            return validatedToken as JwtSecurityToken ?? throw new SecurityTokenException("token is not a JWT");
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             errorMessage = "token validation failed";
             return null;
