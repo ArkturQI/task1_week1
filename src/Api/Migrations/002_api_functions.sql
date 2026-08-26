@@ -42,7 +42,7 @@ END; $$;
 ALTER FUNCTION api.json_schema_validate OWNER TO course_api;
 
 CREATE OR REPLACE FUNCTION api.invoke(p_module text, p_action text, p_version integer, p_context jsonb, p_payload jsonb)
-RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, autocheck, public AS $$
+RETURNS jsonb LANGUAGE plpgsql SET search_path = pg_catalog, autocheck, public AS $$
 DECLARE
     v_def record; v_scope text; v_validation jsonb; v_result jsonb; v_final jsonb;
     v_key text; v_scope_key text; v_payload_hash text; v_stored jsonb; v_stored_hash text;

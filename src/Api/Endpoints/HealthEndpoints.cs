@@ -12,13 +12,16 @@ public static class HealthEndpoints
         {
             try
             {
-                await using var conn = new NpgsqlConnection(connStr);
+                var sb = new NpgsqlConnectionStringBuilder(connStr) { Pooling = false, Timeout = 2, CommandTimeout = 2 };
+                await using var conn = new NpgsqlConnection(sb.ConnectionString);
                 await conn.OpenAsync();
+                await using var cmd = new NpgsqlCommand("SELECT 1", conn);
+                await cmd.ExecuteScalarAsync();
                 return Results.Ok(new { status = "ok", service = "api", db = "up" });
             }
             catch
             {
-                return Results.Json(new { status = "degraded", db = "down" }, statusCode: 503);
+                return Results.Json(new { status = "degraded", service = "api", db = "down" }, statusCode: 503);
             }
         });
     }
