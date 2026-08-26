@@ -17,9 +17,9 @@ POST /api/{module}/{action}
   -> commit или rollback
 ```
 
-## Технологии 
+## Технологии
 
-C# .NET 10, ASP.NET Core, PostgreSQL 17, Docker Compose.
+C# .NET 10, ASP.NET Core, PostgreSQL 17, Docker Compose, Jwt "8.22.0" , Npgsql "Version="10.0.3".
 
 ## Решение
 
@@ -40,14 +40,15 @@ C# .NET 10, ASP.NET Core, PostgreSQL 17, Docker Compose.
                           - autocheck.operations
 ```
 
-- **Gateway**: HTTP proxy, JWT validation (HS256), whitelist routes, forward to Api via Compose DNS.
-- **Api**: Action runtime, JWT claims extraction, context building, calls `api.invoke` in PostgreSQL, handles `/api/payment/request` and `/api/operation/get`.
+- **Gateway**: HTTP proxy, JWT validation (HS256), whitelist routes, forward to Api via Compose DNS. Не содержит catalog, предметную логику и доступ к PostgreSQL.
+- **Api**: Action runtime, JWT claims extraction, context building, единый generic route `POST /api/{module}/{action}`, вызов `api.invoke` в PostgreSQL внутри Npgsql-транзакции.
 - **Cli**: Migration apply, action validate/publish/list/activate/disable.
 - **PostgreSQL**: Schema `autocheck` (catalog, dispatches, operations, events), schema `api` (invoke, payment_request, operation_get functions).
 
-- C4 Container diagram: `docs/c4-container.md`
-- ADR о trust boundary: `docs/adr-001-trust-boundary.md`
-- ADR о техническом и предметном результате: `docs/adr-002-outcome-vs-result.md`
+Документация:
+- C4 Container diagram: [`docs/c4-container.md`](docs/c4-container.md)
+- ADR о trust boundary: [`docs/adr-001-trust-boundary.md`](docs/adr-001-trust-boundary.md)
+- ADR о техническом и предметном результате: [`docs/adr-002-outcome-vs-result.md`](docs/adr-002-outcome-vs-result.md)
 
 ### Запуск
 
