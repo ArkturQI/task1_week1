@@ -121,13 +121,14 @@ BEGIN
         v_final := jsonb_set(jsonb_set(v_result, '{meta}', coalesce(v_result -> 'meta', '{}'::jsonb) || jsonb_build_object('correlationId', v_correlation::text, 'actionVersion', v_def.version)), '{status}', '"ok"'::jsonb);
 
         BEGIN v_op_id := (v_result -> 'result' ->> 'operationId')::uuid; EXCEPTION WHEN OTHERS THEN v_op_id := gen_random_uuid(); END;
+        IF v_op_id IS NULL THEN v_op_id := gen_random_uuid(); END IF;
 
         INSERT INTO autocheck.action_dispatches (module, action, version, request_id, correlation_id, principal, payload_hash, status, outcome, occurred_at)
         VALUES (p_module, p_action, v_def.version, coalesce(v_key, p_context ->> 'requestId', gen_random_uuid()::text), v_correlation, coalesce(p_context ->> 'principal', ''), v_payload_hash, 'OK', v_result ->> 'outcome', clock_timestamp());
 
         IF v_key IS NOT NULL THEN
             INSERT INTO autocheck.operations (operation_id, request_id, idempotency_key, scope_key, module, action, version, operation_kind, status, amount, currency, payload, payload_hash, outcome, result)
-            VALUES (coalesce(v_op_id, gen_random_uuid()), coalesce(v_key, p_context ->> 'requestId', gen_random_uuid()::text), v_key, v_scope_key, p_module, p_action, v_def.version,
+            VALUES (v_op_id, coalesce(v_key, p_context ->> 'requestId', gen_random_uuid()::text), v_key, v_scope_key, p_module, p_action, v_def.version,
                     v_result -> 'result' ->> 'operationKind', v_result ->> 'outcome', (v_result -> 'result' ->> 'amount')::numeric, v_result -> 'result' ->> 'currency',
                     p_payload, v_payload_hash, v_result ->> 'outcome', v_final)
             ON CONFLICT (scope_key, idempotency_key) DO NOTHING;
