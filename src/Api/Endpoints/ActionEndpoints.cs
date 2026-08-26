@@ -39,7 +39,6 @@ public static class ActionEndpoints
             {
                 await using var conn = new NpgsqlConnection(connStr);
                 await conn.OpenAsync(ct);
-                // ЧИТАЕМ ИЗ _tbl, так как нам нужен manifest, которого нет в View
                 var sql = version.HasValue
                     ? "SELECT module, action, version, manifest::text, enabled, is_default FROM autocheck.action_definitions_tbl WHERE module = @m AND action = @a AND version = @v AND enabled LIMIT 1"
                     : "SELECT module, action, version, manifest::text, enabled, is_default FROM autocheck.action_definitions_tbl WHERE module = @m AND action = @a AND is_default = true AND enabled LIMIT 1";
@@ -50,7 +49,8 @@ public static class ActionEndpoints
                 await using var reader = await cmd.ExecuteReaderAsync(ct);
                 if (await reader.ReadAsync(ct))
                 {
-                    using var manifest = JsonDocument.Parse(reader.GetString(3));
+                    // БЕЗ 'using', чтобы документ жил до конца запроса
+                    var manifest = JsonDocument.Parse(reader.GetString(3));
                     actionDef = new ActionDef
                     {
                         Module = reader.GetString(0),
@@ -58,7 +58,10 @@ public static class ActionEndpoints
                         Version = reader.GetInt32(2),
                         Enabled = reader.GetBoolean(4),
                         IsDefault = reader.GetBoolean(5),
-                        Manifest = manifest
+                        Manifest = manifest,
+                        // Используем уникальные имена для out var, чтобы избежать конфликтов
+                        RequestSchema = manifest.RootElement.TryGetProperty("request_schema", out var reqProp) ? reqProp.Clone() : default,
+                        ResponseSchema = manifest.RootElement.TryGetProperty("response_schema", out var resProp) ? resProp.Clone() : default
                     };
                 }
             }
@@ -97,7 +100,8 @@ public static class ActionEndpoints
                     statusCode: 400);
             }
 
-            var requestSchema = actionDef.Manifest.RootElement.TryGetProperty("request_schema", out var rs) ? rs : default;
+            // БЕРЁМ УЖЕ СОХРАНЁННУЮ СХЕМУ, чтобы избежать повторного out var
+            var requestSchema = actionDef.RequestSchema;
             if (requestSchema.ValueKind == JsonValueKind.Object)
             {
                 try
@@ -176,7 +180,8 @@ public static class ActionEndpoints
                         statusCode: 500);
                 }
 
-                var responseSchema = actionDef.Manifest.RootElement.TryGetProperty("response_schema", out var rsc) ? rsc : default;
+                // БЕРЁМ УЖЕ СОХРАНЁННУЮ СХЕМУ
+                var responseSchema = actionDef.ResponseSchema;
                 if (responseSchema.ValueKind == JsonValueKind.Object)
                 {
                     await using var cmd2 = new NpgsqlCommand("SELECT api.json_schema_validate(@schema::jsonb, @result::jsonb)::text", conn, tx);
@@ -196,7 +201,6 @@ public static class ActionEndpoints
 
                 await tx.CommitAsync(ct);
 
-                // Inject correlationId into successful response
                 var finalResponse = new Dictionary<string, object?>();
                 foreach (var prop in root.EnumerateObject())
                 {

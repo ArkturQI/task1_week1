@@ -97,13 +97,13 @@ public static class OpenApiEndpoints
         var list = new List<ActionDef>();
         await using var conn = new NpgsqlConnection(connStr);
         await conn.OpenAsync(ct);
-        // ЧИТАЕМ ИЗ _tbl, так как нам нужен manifest, которого нет в View
         await using var cmd = new NpgsqlCommand(
             "SELECT module, action, version, manifest::text, enabled, is_default FROM autocheck.action_definitions_tbl ORDER BY module, action, version", conn);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            using var manifest = JsonDocument.Parse(reader.GetString(3));
+            // УБРАНО СЛОВО 'using'
+            var manifest = JsonDocument.Parse(reader.GetString(3));
             list.Add(new ActionDef
             {
                 Module = reader.GetString(0),
