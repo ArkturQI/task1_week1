@@ -131,6 +131,10 @@ BEGIN
                     v_result -> 'result' ->> 'operationKind', v_result ->> 'outcome', (v_result -> 'result' ->> 'amount')::numeric, v_result -> 'result' ->> 'currency',
                     p_payload, v_payload_hash, v_result ->> 'outcome', v_final)
             ON CONFLICT (scope_key, idempotency_key) DO NOTHING;
+            IF FOUND THEN
+                INSERT INTO autocheck.operation_events (event_id, operation_id, event_type, payload_hash, occurred_at)
+                VALUES (gen_random_uuid(), v_op_id, 'OPERATION_CREATED', v_payload_hash, clock_timestamp());
+            END IF;
             IF NOT FOUND THEN SELECT o.result INTO v_final FROM autocheck.operations o WHERE o.scope_key = v_scope_key AND o.idempotency_key = v_key; END IF;
         END IF;
     EXCEPTION WHEN OTHERS THEN
@@ -144,7 +148,7 @@ ALTER FUNCTION api.invoke OWNER TO course_api;
 
 CREATE OR REPLACE FUNCTION api.payment_request(p_context jsonb, p_payload jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, autocheck, public AS $$
-DECLARE v_op_id uuid; v_req_id text; v_kind text; v_amount numeric(18,2); v_currency text; v_payload_hash text; v_event_id uuid;
+DECLARE v_op_id uuid; v_req_id text; v_kind text; v_amount numeric(18,2); v_currency text; v_payload_hash text;
 BEGIN
     v_req_id := coalesce(p_context ->> 'requestId', gen_random_uuid()::text);
     IF NOT coalesce(p_context -> 'scopes', '[]'::jsonb) @> jsonb_build_array('payment:write') THEN
@@ -166,9 +170,6 @@ BEGIN
     v_kind := p_payload ->> 'operationKind'; v_currency := p_payload ->> 'currency';
     v_payload_hash := encode(digest(convert_to(p_payload::text, 'UTF8'), 'sha256'), 'hex');
     v_op_id := gen_random_uuid();
-
-    INSERT INTO autocheck.operation_events (event_id, operation_id, event_type, payload_hash, occurred_at)
-    VALUES (gen_random_uuid(), v_op_id, 'OPERATION_CREATED', v_payload_hash, clock_timestamp());
 
     RETURN jsonb_build_object('status', 'ok', 'outcome', 'CREATED', 'result', jsonb_build_object(
         'operationId', v_op_id, 'requestId', v_req_id, 'operationKind', v_kind, 'amount', v_amount::text, 'currency', v_currency, 'status', 'CREATED'));
