@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: course
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d course"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  api:
+    build:
+      context: .
+      dockerfile: src/Api/Dockerfile
+    environment:
+      ConnectionStrings__Course: "Host=postgres;Port=5432;Database=course;Username=postgres;Password=postgres"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: .
+      dockerfile: src/Gateway/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      Api__BaseUrl: "http://api:8080"
+    depends_on:
+      - api
+
+  cli:
+    build:
+      context: .
+      dockerfile: src/Cli/Dockerfile
+    environment:
+      ConnectionStrings__Course: "Host=postgres;Port=5432;Database=course;Username=postgres;Password=postgres"
+
+volumes:
+  pgdata:
