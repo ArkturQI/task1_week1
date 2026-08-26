@@ -1,6 +1,6 @@
 ﻿INSERT INTO autocheck.action_definitions (module, action, version, http_method, target_schema, target_function, outcomes, manifest, manifest_hash, enabled, is_default)
 SELECT 'payment', 'request', 1, 'POST', 'api', 'payment_request', m.manifest -> 'outcomes', m.manifest,
-       encode(digest(m.manifest::text, 'UTF8'), 'sha256'), true, true
+       encode(digest(convert_to(m.manifest::text, 'UTF8'), 'sha256'), 'hex'), true, true
 FROM (SELECT $${
   "contract_version": "course-1", "module": "payment", "action": "request", "version": 1,
   "http_method": "POST", "target_schema": "api", "target_function": "payment_request",
@@ -16,7 +16,7 @@ ON CONFLICT (module, action, version) DO NOTHING;
 
 INSERT INTO autocheck.action_definitions (module, action, version, http_method, target_schema, target_function, outcomes, manifest, manifest_hash, enabled, is_default)
 SELECT 'operation', 'get', 1, 'POST', 'api', 'operation_get', m.manifest -> 'outcomes', m.manifest,
-       encode(digest(m.manifest::text, 'UTF8'), 'sha256'), true, true
+       encode(digest(convert_to(m.manifest::text, 'UTF8'), 'sha256'), 'hex'), true, true
 FROM (SELECT $${
   "contract_version": "course-1", "module": "operation", "action": "get", "version": 1,
   "http_method": "POST", "target_schema": "api", "target_function": "operation_get",

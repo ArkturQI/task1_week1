@@ -39,10 +39,10 @@ BEGIN
     END IF;
     RETURN jsonb_build_object('valid', true);
 END; $$;
-ALTER FUNCTION api.json_schema_validate OWNER TO course_api;
+ALTER FUNCTION api.json_schema_validate OWNER TO postgres;
 
 CREATE OR REPLACE FUNCTION api.invoke(p_module text, p_action text, p_version integer, p_context jsonb, p_payload jsonb)
-RETURNS jsonb LANGUAGE plpgsql SET search_path = pg_catalog, autocheck, public AS $$
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, autocheck, public AS $$
 DECLARE
     v_def record; v_scope text; v_validation jsonb; v_result jsonb; v_final jsonb;
     v_key text; v_scope_key text; v_payload_hash text; v_stored jsonb; v_stored_hash text;
@@ -144,7 +144,7 @@ BEGIN
     END;
     RETURN v_final;
 END; $$;
-ALTER FUNCTION api.invoke OWNER TO course_api;
+ALTER FUNCTION api.invoke OWNER TO postgres;
 
 CREATE OR REPLACE FUNCTION api.payment_request(p_context jsonb, p_payload jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, autocheck, public AS $$
@@ -174,7 +174,7 @@ BEGIN
     RETURN jsonb_build_object('status', 'ok', 'outcome', 'CREATED', 'result', jsonb_build_object(
         'operationId', v_op_id, 'requestId', v_req_id, 'operationKind', v_kind, 'amount', v_amount::text, 'currency', v_currency, 'status', 'CREATED'));
 END; $$;
-ALTER FUNCTION api.payment_request OWNER TO course_api;
+ALTER FUNCTION api.payment_request OWNER TO postgres;
 
 CREATE OR REPLACE FUNCTION api.operation_get(p_context jsonb, p_payload jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, autocheck, public AS $$
@@ -192,7 +192,7 @@ BEGIN
         'operationId', v_op.operation_id, 'requestId', v_op.request_id, 'operationKind', v_op.operation_kind,
         'amount', v_op.amount::text, 'currency', v_op.currency, 'status', v_op.status));
 END; $$;
-ALTER FUNCTION api.operation_get OWNER TO course_api;
+ALTER FUNCTION api.operation_get OWNER TO postgres;
 
 GRANT EXECUTE ON FUNCTION api.invoke TO course_runtime;
 GRANT EXECUTE ON FUNCTION api.json_schema_validate TO course_runtime;
