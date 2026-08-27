@@ -1,4 +1,4 @@
-# Неделя 1. Database-first action runtime
+# Database-first action runtime
 
 ## Главный инвариант
 
