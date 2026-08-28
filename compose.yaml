@@ -33,7 +33,7 @@ services:
           -v ON_ERROR_STOP=1 \
           <<'SQL'
 
-        DO $$
+        DO $$$$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1
@@ -89,7 +89,7 @@ services:
                     PASSWORD 'cli_secret_change_me';
             END IF;
         END
-        $$;
+        $$$$;
 
         GRANT CONNECT, CREATE
         ON DATABASE course
