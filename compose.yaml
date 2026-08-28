@@ -18,9 +18,9 @@ services:
       context: .
       dockerfile: src/Api/Dockerfile
     environment:
-      # Runtime: least-privilege login role (only EXECUTE + SELECT catalog)
+      # Runtime: least-privilege login role
       ConnectionStrings__Course: "Host=postgres;Port=5432;Database=course;Username=course_api_login;Password=api_secret_change_me"
-      # Migration: elevated privileges for DbMigrator (CREATE tables, schemas)
+      # Migration: elevated privileges for DbMigrator
       MIGRATION_CONNECTION_STRING: "Host=postgres;Port=5432;Database=course;Username=postgres;Password=postgres"
       COURSE_JWT_SIGNING_KEY: "${COURSE_JWT_SIGNING_KEY:-moduledev-week1-rotated-key-do-not-use-in-production-2026-aug}"
     depends_on:
@@ -45,9 +45,6 @@ services:
     environment:
       # CLI: separate login role with catalog write privileges
       ConnectionStrings__Course: "Host=postgres;Port=5432;Database=course;Username=course_cli_login;Password=cli_secret_change_me"
-    # Keep cli container running so compose-build check passes.
-    # docker compose run ignores this override and uses Dockerfile ENTRYPOINT.
-    entrypoint: ["sleep", "infinity"]
 
 volumes:
   pgdata:

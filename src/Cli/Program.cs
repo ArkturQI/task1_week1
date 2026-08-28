@@ -4,6 +4,16 @@ using Cli.Services;
 var cmd = args.Length > 0 ? args[0] : null;
 var sub = args.Length > 1 ? args[1] : null;
 
+// Keep-alive mode for docker compose up -d (cli service must stay running)
+if (cmd is null)
+{
+    Console.WriteLine("{\"status\":\"ok\",\"message\":\"cli ready — no command provided, entering keep-alive mode\"}");
+    while (true)
+    {
+        await Task.Delay(Timeout.Infinite);
+    }
+}
+
 try
 {
     switch (cmd)
