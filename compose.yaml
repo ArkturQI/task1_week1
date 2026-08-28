@@ -7,6 +7,7 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/00_roles.sql:/docker-entrypoint-initdb.d/00_roles.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d course"]
       interval: 2s
@@ -19,7 +20,7 @@ services:
       dockerfile: src/Api/Dockerfile
     environment:
       ConnectionStrings__Course: "Host=postgres;Port=5432;Database=course;Username=course_api_login;Password=api_secret_change_me"
-      MIGRATION_CONNECTION_STRING: "Host=postgres;Port=5432;Database=course;Username=postgres;Password=postgres"
+      MIGRATION_CONNECTION_STRING: "Host=postgres;Port=5432;Database=course;Username=course_migration_login;Password=migration_secret_change_me"
       COURSE_JWT_SIGNING_KEY: "${COURSE_JWT_SIGNING_KEY:-moduledev-week1-rotated-key-do-not-use-in-production-2026-aug}"
     depends_on:
       postgres:
