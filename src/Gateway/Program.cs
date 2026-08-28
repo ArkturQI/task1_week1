@@ -54,7 +54,7 @@ async Task<IResult> ProxyAsync(HttpContext http, string path)
         }
 
         using var ms = new MemoryStream();
-        await http.Request.Body.CopyToAsync(ms);
+        await http.Request.Body.CopyToAsync(ms, http.RequestAborted);
         if (ms.Length > 0)
         {
             request.Content = new ByteArrayContent(ms.ToArray());
@@ -62,10 +62,13 @@ async Task<IResult> ProxyAsync(HttpContext http, string path)
                 "Content-Type", http.Request.ContentType ?? "application/json");
         }
 
-        var response = await client.SendAsync(request);
-        var bodyText = await response.Content.ReadAsStringAsync();
-
+        var response = await client.SendAsync(request, HttpCompletionOption.ResponseContentRead, http.RequestAborted);
+        var bodyText = await response.Content.ReadAsStringAsync(http.RequestAborted);
         return Results.Content(bodyText, "application/json", statusCode: (int)response.StatusCode);
+    }
+    catch (OperationCanceledException)
+    {
+        return Results.Json(new { status = "error", code = "action.timeout", message = "client aborted or timeout" }, statusCode: 504);
     }
     catch
     {

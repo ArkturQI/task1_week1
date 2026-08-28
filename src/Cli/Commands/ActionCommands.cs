@@ -29,7 +29,6 @@ internal static class ActionCommands
         await using var conn = new NpgsqlConnection(Database.ConnStr());
         await conn.OpenAsync();
 
-        // ИСПРАВЛЕНО: убрано _tbl
         await using var sel = new NpgsqlCommand(
             "SELECT manifest_hash FROM autocheck.action_definitions WHERE module = @m AND action = @a AND version = @v", conn);
         sel.Parameters.AddWithValue("m", m.Module);
@@ -48,9 +47,19 @@ internal static class ActionCommands
             return 1;
         }
 
-        // ИСПРАВЛЕНО: убрано _tbl
+        await using var tx = await conn.BeginTransactionAsync();
+
+        if (m.IsDefault)
+        {
+            await using var unset = new NpgsqlCommand(
+                "UPDATE autocheck.action_definitions SET is_default = false WHERE module = @m AND action = @a", conn, tx);
+            unset.Parameters.AddWithValue("m", m.Module);
+            unset.Parameters.AddWithValue("a", m.Action);
+            await unset.ExecuteNonQueryAsync();
+        }
+
         await using var ins = new NpgsqlCommand(
-            "INSERT INTO autocheck.action_definitions (module, action, version, http_method, target_schema, target_function, outcomes, manifest, manifest_hash, enabled, is_default) VALUES (@m, @a, @v, @hm, @ts, @tf, @outcomes::jsonb, @manifest::jsonb, @hash, @enabled, @is_default)", conn);
+            "INSERT INTO autocheck.action_definitions (module, action, version, http_method, target_schema, target_function, outcomes, manifest, manifest_hash, enabled, is_default) VALUES (@m, @a, @v, @hm, @ts, @tf, @outcomes::jsonb, @manifest::jsonb, @hash, @enabled, @is_default)", conn, tx);
         ins.Parameters.AddWithValue("m", m.Module);
         ins.Parameters.AddWithValue("a", m.Action);
         ins.Parameters.AddWithValue("v", m.Version);
@@ -64,6 +73,7 @@ internal static class ActionCommands
         ins.Parameters.AddWithValue("is_default", m.IsDefault);
         await ins.ExecuteNonQueryAsync();
 
+        await tx.CommitAsync();
         Console.WriteLine(Envelope.Ok(PublishResult(m)));
         return 0;
     }
@@ -73,7 +83,6 @@ internal static class ActionCommands
         await using var conn = new NpgsqlConnection(Database.ConnStr());
         await conn.OpenAsync();
 
-        // ИСПРАВЛЕНО: убрано _tbl
         await using var cmd = new NpgsqlCommand(
             "SELECT module, action, version, enabled, is_default FROM autocheck.action_definitions ORDER BY module, action, version", conn);
         await using var reader = await cmd.ExecuteReaderAsync();
@@ -90,7 +99,6 @@ internal static class ActionCommands
                 is_default = reader.GetBoolean(4)
             });
         }
-
         Console.WriteLine(Envelope.Ok(new { resource = "action", operation = "listed", items }));
         return 0;
     }
@@ -138,7 +146,7 @@ internal static class ActionCommands
         if (op == "activate")
         {
             await using var tx = await conn.BeginTransactionAsync();
-            // ИСПРАВЛЕНО: убрано _tbl
+
             await using var guard = new NpgsqlCommand(
                 "SELECT count(*) FROM autocheck.action_definitions WHERE module = @m AND action = @a AND version = @v AND enabled", conn, tx);
             guard.Parameters.AddWithValue("m", module);
@@ -151,15 +159,14 @@ internal static class ActionCommands
                 return 1;
             }
 
-            // ИСПРАВЛЕНО: убрано _tbl
             await using var upd = new NpgsqlCommand(
-                "UPDATE autocheck.action_definitions SET is_default = (version = @v) WHERE module = @m AND action = @a", conn, tx);
+                "UPDATE autocheck.action_definitions SET is_default = (version = @v) WHERE module = @m AND action = @a AND enabled = true", conn, tx);
             upd.Parameters.AddWithValue("m", module);
             upd.Parameters.AddWithValue("a", action);
             upd.Parameters.AddWithValue("v", version.Value);
             await upd.ExecuteNonQueryAsync();
-            await tx.CommitAsync();
 
+            await tx.CommitAsync();
             Console.WriteLine(Envelope.Ok(new
             {
                 resource = "action",
@@ -171,7 +178,7 @@ internal static class ActionCommands
         }
 
         await using var tx2 = await conn.BeginTransactionAsync();
-        // ИСПРАВЛЕНО: убрано _tbl
+
         await using var dis = new NpgsqlCommand(
             "UPDATE autocheck.action_definitions SET enabled = false, is_default = false WHERE module = @m AND action = @a AND version = @v", conn, tx2);
         dis.Parameters.AddWithValue("m", module);
@@ -186,7 +193,6 @@ internal static class ActionCommands
 
         if (replacement is not null)
         {
-            // ИСПРАВЛЕНО: убрано _tbl
             await using var rep = new NpgsqlCommand(
                 "UPDATE autocheck.action_definitions SET is_default = true WHERE module = @m AND action = @a AND version = @r AND enabled", conn, tx2);
             rep.Parameters.AddWithValue("m", module);

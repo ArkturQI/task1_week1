@@ -34,7 +34,6 @@ public static class OpenApiEndpoints
                 var d = defs.FirstOrDefault(x => x.Module == module && x.Action == action && x.Version == version);
                 if (d is null)
                     return Results.Json(new { status = "error", code = "action.not_found" }, statusCode: 404);
-
                 var paths = new Dictionary<string, object> { [$"/api/{module}/{action}"] = BuildPathItem(d) };
                 return Results.Ok(BuildDocument(paths));
             }
@@ -59,7 +58,6 @@ public static class OpenApiEndpoints
             }
         };
 
-        // ИСПРАВЛЕНО: envelope с status, outcome, result, meta
         var envelopeSchema = new Dictionary<string, object>
         {
             ["type"] = "object",
@@ -72,6 +70,7 @@ public static class OpenApiEndpoints
                 ["meta"] = new Dictionary<string, object>
                 {
                     ["type"] = "object",
+                    ["required"] = new[] { "correlationId", "actionVersion" },
                     ["properties"] = new Dictionary<string, object>
                     {
                         ["correlationId"] = new Dictionary<string, object> { ["type"] = "string" },
@@ -94,6 +93,7 @@ public static class OpenApiEndpoints
                 ["meta"] = new Dictionary<string, object>
                 {
                     ["type"] = "object",
+                    ["required"] = new[] { "correlationId", "actionVersion" },
                     ["properties"] = new Dictionary<string, object>
                     {
                         ["correlationId"] = new Dictionary<string, object> { ["type"] = "string" },

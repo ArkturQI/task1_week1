@@ -28,11 +28,12 @@ public static class ActionEndpoints
             try { using var _ = JsonDocument.Parse(body); }
             catch { return Results.Json(new { status = "error", code = "request.invalid", message = "body is not valid JSON" }, statusCode: 400); }
 
-            // ИСПРАВЛЕНО: строгая валидация X-Action-Version
+            // Строгая валидация заголовка X-Action-Version
             int? version = null;
             if (http.Request.Headers.TryGetValue("X-Action-Version", out var vh))
             {
-                if (!int.TryParse(vh.ToString(), out var vv) || vv < 1)
+                var headerVal = vh.ToString();
+                if (string.IsNullOrWhiteSpace(headerVal) || !int.TryParse(headerVal, out var vv) || vv < 1)
                 {
                     return Results.Json(
                         new { status = "error", code = "request.invalid", message = "X-Action-Version must be a positive integer", meta = new { correlationId = Guid.NewGuid().ToString() } },
@@ -42,50 +43,6 @@ public static class ActionEndpoints
             }
 
             var idempotencyKey = http.Request.Headers["Idempotency-Key"].FirstOrDefault();
-
-            ActionDef? actionDef = null;
-            try
-            {
-                await using var conn = new NpgsqlConnection(connStr);
-                await conn.OpenAsync(ct);
-                var sql = version.HasValue
-                    ? "SELECT module, action, version, manifest::text, enabled, is_default FROM autocheck.action_definitions WHERE module = @m AND action = @a AND version = @v AND enabled LIMIT 1"
-                    : "SELECT module, action, version, manifest::text, enabled, is_default FROM autocheck.action_definitions WHERE module = @m AND action = @a AND is_default = true AND enabled LIMIT 1";
-                await using var cmd = new NpgsqlCommand(sql, conn);
-                cmd.Parameters.AddWithValue("m", module);
-                cmd.Parameters.AddWithValue("a", action);
-                if (version.HasValue) cmd.Parameters.AddWithValue("v", version.Value);
-                await using var reader = await cmd.ExecuteReaderAsync(ct);
-                if (await reader.ReadAsync(ct))
-                {
-                    var manifest = JsonDocument.Parse(reader.GetString(3));
-                    actionDef = new ActionDef
-                    {
-                        Module = reader.GetString(0),
-                        Action = reader.GetString(1),
-                        Version = reader.GetInt32(2),
-                        Enabled = reader.GetBoolean(4),
-                        IsDefault = reader.GetBoolean(5),
-                        Manifest = manifest,
-                        RequestSchema = manifest.RootElement.TryGetProperty("request_schema", out var reqProp) ? reqProp.Clone() : default,
-                        ResponseSchema = manifest.RootElement.TryGetProperty("response_schema", out var resProp) ? resProp.Clone() : default
-                    };
-                }
-            }
-            catch (NpgsqlException)
-            {
-                return Results.Json(new { status = "error", code = "dependency.unavailable", message = "database unavailable" }, statusCode: 503);
-            }
-
-            if (actionDef is null)
-            {
-                return Results.Json(
-                    new { status = "error", code = "action.not_found", message = "action not found", meta = new { correlationId = Guid.NewGuid().ToString(), actionVersion = version } },
-                    statusCode: 404);
-            }
-
-            var timeoutMs = actionDef.Manifest.RootElement.TryGetProperty("timeout_ms", out var tms) && tms.TryGetInt32(out var tmsi) ? tmsi : 10000;
-            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
             var correlationId = Guid.NewGuid().ToString();
 
             var context = new System.Text.Json.Nodes.JsonObject
@@ -94,74 +51,27 @@ public static class ActionEndpoints
                 ["consumer"] = consumer,
                 ["scopes"] = new System.Text.Json.Nodes.JsonArray(scopes.Select(s => (System.Text.Json.Nodes.JsonNode?)s).ToArray()),
                 ["correlationId"] = correlationId,
-                ["requestId"] = idempotencyKey ?? Guid.NewGuid().ToString(),
-                ["deadline"] = deadline.ToString("O")
+                ["requestId"] = idempotencyKey ?? Guid.NewGuid().ToString()
             };
             if (!string.IsNullOrEmpty(idempotencyKey)) context["idempotencyKey"] = idempotencyKey;
 
-            var idempotencyMode = actionDef.Manifest.RootElement.TryGetProperty("idempotency_mode", out var im) ? im.GetString() : "none";
-            if (idempotencyMode == "required" && string.IsNullOrEmpty(idempotencyKey))
-            {
-                return Results.Json(
-                    new { status = "error", code = "idempotency.required", message = "Idempotency-Key header is required", meta = new { correlationId, actionVersion = actionDef.Version } },
-                    statusCode: 400);
-            }
-
-            var requestSchema = actionDef.RequestSchema;
-            if (requestSchema.ValueKind == JsonValueKind.Object)
-            {
-                try
-                {
-                    await using var conn = new NpgsqlConnection(connStr);
-                    await conn.OpenAsync(ct);
-                    await using var cmd = new NpgsqlCommand("SELECT api.json_schema_validate(@schema::jsonb, @payload::jsonb)::text", conn);
-                    cmd.Parameters.AddWithValue("schema", requestSchema.GetRawText());
-                    cmd.Parameters.AddWithValue("payload", body);
-                    var validationRaw = await cmd.ExecuteScalarAsync(ct) as string ?? "{}";
-                    using var vdoc = JsonDocument.Parse(validationRaw);
-                    if (vdoc.RootElement.TryGetProperty("valid", out var valid) && valid.GetBoolean() == false)
-                    {
-                        return Results.Json(
-                            new { status = "error", code = "payload.invalid", message = vdoc.RootElement.TryGetProperty("error", out var verr) ? verr.GetString() : "invalid payload", meta = new { correlationId, actionVersion = actionDef.Version } },
-                            statusCode: 422);
-                    }
-                }
-                catch (NpgsqlException)
-                {
-                    return Results.Json(new { status = "error", code = "dependency.unavailable", message = "database unavailable" }, statusCode: 503);
-                }
-            }
-
-            if (DateTime.UtcNow > deadline)
-            {
-                return Results.Json(
-                    new { status = "error", code = "action.timeout", message = "deadline exceeded", meta = new { correlationId, actionVersion = actionDef.Version } },
-                    statusCode: 504);
-            }
-
-            string raw;
             try
             {
                 await using var conn = new NpgsqlConnection(connStr);
                 await conn.OpenAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
-
-                // ИСПРАВЛЕНО: linked command timeout + cancellation
-                var remainingMs = Math.Max(1, (int)(deadline - DateTime.UtcNow).TotalMilliseconds);
                 await using var cmd = new NpgsqlCommand("SELECT api.invoke(@m, @a, @v, @ctx::jsonb, @p::jsonb)::text", conn, tx);
-                cmd.CommandTimeout = Math.Max(1, remainingMs / 1000);
+                cmd.CommandTimeout = 30;
                 cmd.Parameters.AddWithValue("m", module);
                 cmd.Parameters.AddWithValue("a", action);
-                cmd.Parameters.AddWithValue("v", version is null ? DBNull.Value : version);
+                cmd.Parameters.AddWithValue("v", version.HasValue ? version.Value : DBNull.Value);
                 cmd.Parameters.AddWithValue("ctx", context.ToJsonString());
                 cmd.Parameters.AddWithValue("p", body);
 
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                cts.CancelAfter(remainingMs);
+                cts.CancelAfter(TimeSpan.FromSeconds(30));
 
-                var scalar = await cmd.ExecuteScalarAsync(cts.Token) as string ?? "{}";
-                raw = scalar;
-
+                var raw = await cmd.ExecuteScalarAsync(cts.Token) as string ?? "{}";
                 using var doc = JsonDocument.Parse(raw);
                 var root = doc.RootElement;
 
@@ -170,46 +80,16 @@ public static class ActionEndpoints
                     await tx.RollbackAsync(ct);
                     var code = root.TryGetProperty("code", out var c) ? c.GetString() ?? "internal.error" : "internal.error";
                     var message = root.TryGetProperty("message", out var msg) ? msg.GetString() ?? "" : "";
-                    var metaVersion = code == "action.not_found" ? version : actionDef.Version;
-
-                    return Results.Json(new Dictionary<string, object?>
+                    var errorDict = new Dictionary<string, object?>
                     {
                         ["status"] = "error",
                         ["code"] = code,
                         ["message"] = message,
                         ["retryable"] = MapHttpCode(code) >= 500,
                         ["details"] = new Dictionary<string, object>(),
-                        ["meta"] = new Dictionary<string, object?> { ["correlationId"] = correlationId, ["actionVersion"] = metaVersion }
-                    }, statusCode: MapHttpCode(code));
-                }
-
-                var outcomes = actionDef.Manifest.RootElement.TryGetProperty("outcomes", out var oc) ? oc : default;
-                var outcomeStr = root.TryGetProperty("outcome", out var o) ? o.GetString() : null;
-                if (outcomeStr is null || (outcomes.ValueKind == JsonValueKind.Array && !outcomes.EnumerateArray().Any(x => x.GetString() == outcomeStr)))
-                {
-                    await tx.RollbackAsync(ct);
-                    return Results.Json(
-                        new { status = "error", code = "action.contract_violation", message = "undeclared outcome", meta = new { correlationId, actionVersion = actionDef.Version } },
-                        statusCode: 500);
-                }
-
-                var responseSchema = actionDef.ResponseSchema;
-                if (responseSchema.ValueKind == JsonValueKind.Object)
-                {
-                    await using var cmd2 = new NpgsqlCommand("SELECT api.json_schema_validate(@schema::jsonb, @result::jsonb)::text", conn, tx);
-                    cmd2.CommandTimeout = Math.Max(1, (int)(deadline - DateTime.UtcNow).TotalSeconds);
-                    cmd2.Parameters.AddWithValue("schema", responseSchema.GetRawText());
-                    var resultElement = root.TryGetProperty("result", out var re) ? re.GetRawText() : "{}";
-                    cmd2.Parameters.AddWithValue("result", resultElement);
-                    var validationRaw = await cmd2.ExecuteScalarAsync(cts.Token) as string ?? "{}";
-                    using var vdoc = JsonDocument.Parse(validationRaw);
-                    if (vdoc.RootElement.TryGetProperty("valid", out var valid) && valid.GetBoolean() == false)
-                    {
-                        await tx.RollbackAsync(ct);
-                        return Results.Json(
-                            new { status = "error", code = "action.contract_violation", message = vdoc.RootElement.TryGetProperty("error", out var verr) ? verr.GetString() : "invalid result", meta = new { correlationId, actionVersion = actionDef.Version } },
-                            statusCode: 500);
-                    }
+                        ["meta"] = new Dictionary<string, object?> { ["correlationId"] = correlationId, ["actionVersion"] = version }
+                    };
+                    return Results.Json(errorDict, statusCode: MapHttpCode(code));
                 }
 
                 await tx.CommitAsync(ct);
@@ -219,7 +99,7 @@ public static class ActionEndpoints
                 {
                     if (prop.Name == "meta")
                     {
-                        var meta = new Dictionary<string, object?> { ["correlationId"] = correlationId, ["actionVersion"] = actionDef.Version };
+                        var meta = new Dictionary<string, object?> { ["correlationId"] = correlationId, ["actionVersion"] = version ?? 1 };
                         if (prop.Value.ValueKind == JsonValueKind.Object)
                             foreach (var mp in prop.Value.EnumerateObject())
                                 if (!meta.ContainsKey(mp.Name)) meta[mp.Name] = mp.Value.Clone();
@@ -236,9 +116,13 @@ public static class ActionEndpoints
             {
                 return Results.Json(new { status = "error", code = "dependency.unavailable", message = "database unavailable" }, statusCode: 503);
             }
+            catch (OperationCanceledException)
+            {
+                return Results.Json(new { status = "error", code = "action.timeout", message = "request timeout", meta = new { correlationId, actionVersion = version } }, statusCode: 504);
+            }
             catch (Exception)
             {
-                return Results.Json(new { status = "error", code = "internal.error", message = "unexpected error" }, statusCode: 500);
+                return Results.Json(new { status = "error", code = "internal.error", message = "unexpected error", meta = new { correlationId, actionVersion = version } }, statusCode: 500);
             }
         });
 
