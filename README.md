@@ -19,7 +19,7 @@ POST /api/{module}/{action}
 
 ## Технологии
 
-C# .NET 10, ASP.NET Core, PostgreSQL 17, Docker Compose, Jwt "8.22.0" , Npgsql "Version="10.0.3".
+C# .NET 10, ASP.NET Core, PostgreSQL 17, Docker Compose, Jwt "8.22.0" , Npgsql "10.0.3".
 
 ## Решение
 
@@ -37,13 +37,14 @@ C# .NET 10, ASP.NET Core, PostgreSQL 17, Docker Compose, Jwt "8.22.0" , Npgsql "
                           - api.json_schema_validate
                           - target function (dynamic)
                           - autocheck.action_dispatches
+                          - autocheck.idempotency_claims
                           - autocheck.operations
 ```
 
 - **Gateway**: HTTP proxy, JWT validation (HS256), whitelist routes, forward to Api via Compose DNS. Не содержит catalog, предметную логику и доступ к PostgreSQL.
 - **Api**: Action runtime, JWT claims extraction, context building, единый generic route `POST /api/{module}/{action}`, вызов `api.invoke` в PostgreSQL внутри Npgsql-транзакции.
 - **Cli**: Migration apply, action validate/publish/list/activate/disable.
-- **PostgreSQL**: Schema `autocheck` (catalog, dispatches, operations, events), schema `api` (invoke, payment_request, operation_get functions).
+- **PostgreSQL**: Schema `autocheck` (catalog, dispatches, idempotency_claims, operations, events), schema `api` (invoke, payment_request, operation_get functions).
 
 Документация:
 - C4 Container diagram: [`docs/c4-container.md`](docs/c4-container.md)
@@ -70,10 +71,11 @@ Prerequisites: Docker Desktop, Docker Compose.
 
 **Api:**
 
-- `ConnectionStrings__Course`: `Host=postgres;Port=5432;Database=course;Username=postgres;Password=postgres`
+- `ConnectionStrings__Course`: `Host=postgres;Port=5432;Database=course;Username=course_api_login;Password=api_secret_change_me`
 - `COURSE_JWT_ISSUER`: `moduledev-course` (можно переопределить через env)
 - `COURSE_JWT_AUDIENCE`: `moduledev-api` (можно переопределить через env)
-- `COURSE_JWT_SIGNING_KEY`: HS256 key ≥32 bytes (fallback: `this-is-a-very-long-and-secure-secret-key-for-jwt-signing-at-least-32-bytes`)
+- `COURSE_JWT_SIGNING_KEY`: HS256 key ≥32 bytes (fallback: `moduledev-week1-rotated-key-do-not-use-in-production-2026-aug`)
+- `MIGRATION_CONNECTION_STRING`: `Host=postgres;Port=5432;Database=course;Username=postgres;Password=postgres`
 
 **Gateway:**
 
@@ -81,7 +83,7 @@ Prerequisites: Docker Desktop, Docker Compose.
 
 **Cli:**
 
-- `ConnectionStrings__Course`: same as Api
+- `ConnectionStrings__Course`: `Host=postgres;Port=5432;Database=course;Username=course_cli_login;Password=cli_secret_change_me`
 
 Публичная проверка подменяет `COURSE_JWT_SIGNING_KEY` через Compose override.
 
@@ -89,13 +91,13 @@ Prerequisites: Docker Desktop, Docker Compose.
 
 - **Когда**: При старте Api (`DbMigrator.MigrateAsync`)
 - **Какой сервис**: Api (`src/Api/DATA/DbMigrator.cs`)
-- **Как**: Читает `Migrations/*.sql` из output directory, выполняет по порядку
+- **Как**: Читает `Migrations/*.sql` из output directory, выполняет по порядку. Миграции выполняются отдельным connection string с повышенными привилегиями; runtime использует least-privilege роль.
 
 Файлы:
 
-- `001_schema.sql`: tables, roles, grants
+- `001_schema.sql`: tables, roles, grants, idempotency_claims
 - `002_api_functions.sql`: `api.json_schema_validate`, `api.invoke`
-- `003_payment_v2.sql`: `api.payment_request`, `api.operation_get`
+- `003_payment_v2.sql`: seed actions для payment и operation
 
 ### Проверка
 
@@ -153,9 +155,8 @@ SELECT * FROM autocheck.action_definitions;
 
 ### Ограничения
 
-- JSON Schema validator поддерживает базовые типы (`object`, `string`, `number`, `boolean`), `required`, `properties`, `additionalProperties`, `enum`, `const`, `minLength`, `maxLength`.
-- JWT signing key fallback hardcoded для dev.
+- JSON Schema validator поддерживает subset Draft 2020-12: базовые типы (`object`, `string`, `number`, `integer`, `boolean`, `array`), `required`, `properties`, `additionalProperties`, `enum`, `const`, `minLength`, `maxLength`, `pattern`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minItems`, `maxItems`, `items`.
 - OpenAPI генерируется на лету из `action_definitions`, без кэширования.
-- Concurrent idempotency защищается PostgreSQL `UNIQUE` constraint.
+- Concurrent idempotency защищается PostgreSQL `UNIQUE` constraint на `idempotency_claims`.
 - Payment validation hardcoded: only RUB, amount format `^\d+\.\d{2}$`.
 - No outbox/inbox — не входит в scope недели 1.
