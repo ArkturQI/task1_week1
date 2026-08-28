@@ -4,72 +4,12 @@ CREATE SCHEMA IF NOT EXISTS autocheck;
 CREATE SCHEMA IF NOT EXISTS api;
 CREATE SCHEMA IF NOT EXISTS opencheck;
 
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'course_runtime') THEN
-        CREATE ROLE course_runtime NOLOGIN;
-    END IF;
-
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'course_api') THEN
-        CREATE ROLE course_api NOLOGIN;
-    END IF;
-
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'api_owner') THEN
-        CREATE ROLE api_owner NOLOGIN NOSUPERUSER;
-    END IF;
-
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'course_migration_login') THEN
-        CREATE ROLE course_migration_login
-            WITH LOGIN
-            PASSWORD 'migration_secret_change_me'
-            CREATEROLE;
-    END IF;
-
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'course_api_login') THEN
-        CREATE ROLE course_api_login
-            WITH LOGIN
-            PASSWORD 'api_secret_change_me';
-    END IF;
-
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'course_cli_login') THEN
-        CREATE ROLE course_cli_login
-            WITH LOGIN
-            PASSWORD 'cli_secret_change_me';
-    END IF;
-END $$;
-
-GRANT CONNECT, CREATE
-ON DATABASE course
-TO course_migration_login;
-
-GRANT CONNECT
-ON DATABASE course
-TO course_api_login, course_cli_login;
-
-GRANT CREATE
-ON DATABASE course
-TO course_cli_login;
-
-GRANT api_owner
-TO course_migration_login
-WITH ADMIN OPTION;
-
-GRANT api_owner
-TO course_cli_login
-WITH ADMIN OPTION;
-
 GRANT CREATE
 ON SCHEMA api
 TO api_owner;
 
 GRANT CREATE
 ON SCHEMA opencheck
-TO course_cli_login;
-
-GRANT course_runtime
-TO course_api_login;
-
-GRANT course_api
 TO course_cli_login;
 
 GRANT USAGE
@@ -138,70 +78,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_action_default_unique
     ON autocheck.action_definitions (module, action)
     WHERE is_default = true;
 
-CREATE OR REPLACE FUNCTION autocheck.enforce_exactly_one_default()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_module text;
-    v_action text;
-    v_enabled_count bigint;
-    v_default_count bigint;
-BEGIN
-    IF TG_OP = 'DELETE' THEN
-        v_module := OLD.module;
-        v_action := OLD.action;
-    ELSE
-        v_module := NEW.module;
-        v_action := NEW.action;
-    END IF;
-
-    SELECT count(*)
-    INTO v_enabled_count
-    FROM autocheck.action_definitions
-    WHERE module = v_module
-      AND action = v_action
-      AND enabled = true;
-
-    IF v_enabled_count = 0 THEN
-        RETURN NULL;
-    END IF;
-
-    SELECT count(*)
-    INTO v_default_count
-    FROM autocheck.action_definitions
-    WHERE module = v_module
-      AND action = v_action
-      AND enabled = true
-      AND is_default = true;
-
-    IF v_default_count <> 1 THEN
-        RAISE EXCEPTION USING
-            ERRCODE = '23514',
-            MESSAGE = format(
-                'route %s.%s must have exactly one enabled default version',
-                v_module,
-                v_action
-            );
-    END IF;
-
-    RETURN NULL;
-END;
-$$;
-
-ALTER FUNCTION autocheck.enforce_exactly_one_default()
-OWNER TO api_owner;
-
-DROP TRIGGER IF EXISTS trg_action_definitions_exactly_one_default
-ON autocheck.action_definitions;
-
-CREATE CONSTRAINT TRIGGER trg_action_definitions_exactly_one_default
-AFTER INSERT OR UPDATE OR DELETE
-ON autocheck.action_definitions
-DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW
-EXECUTE FUNCTION autocheck.enforce_exactly_one_default();
-
 CREATE TABLE IF NOT EXISTS autocheck.action_dispatches (
     id             bigserial PRIMARY KEY,
     module         text NOT NULL,
@@ -233,7 +109,12 @@ CREATE TABLE IF NOT EXISTS autocheck.operations (
     version         integer NOT NULL,
     operation_kind  text,
     status          text NOT NULL
-                    CHECK (status IN ('CREATED', 'PROCESSING', 'COMPLETED', 'REJECTED')),
+                    CHECK (status IN (
+                        'CREATED',
+                        'PROCESSING',
+                        'COMPLETED',
+                        'REJECTED'
+                    )),
     process_id      uuid,
     amount          numeric(18,2),
     currency        text,
@@ -266,32 +147,36 @@ CREATE TABLE IF NOT EXISTS autocheck.idempotency_claims (
     idempotency_key text NOT NULL,
     payload_hash    text NOT NULL,
     status          text NOT NULL DEFAULT 'PENDING'
-                    CHECK (status IN ('PENDING', 'COMPLETED', 'FAILED')),
+                    CHECK (status IN (
+                        'PENDING',
+                        'COMPLETED',
+                        'FAILED'
+                    )),
     result          jsonb,
     claimed_at      timestamptz NOT NULL DEFAULT clock_timestamp(),
     completed_at    timestamptz,
     PRIMARY KEY (scope_key, idempotency_key)
 );
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON
-    autocheck.contract_info,
-    autocheck.action_definitions,
-    autocheck.action_dispatches,
-    autocheck.operations,
-    autocheck.operation_events,
-    autocheck.idempotency_claims
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON autocheck.contract_info,
+   autocheck.action_definitions,
+   autocheck.action_dispatches,
+   autocheck.operations,
+   autocheck.operation_events,
+   autocheck.idempotency_claims
 TO course_api;
 
 GRANT USAGE, SELECT
 ON ALL SEQUENCES IN SCHEMA autocheck
 TO course_api;
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON
-    autocheck.action_definitions,
-    autocheck.action_dispatches,
-    autocheck.operations,
-    autocheck.operation_events,
-    autocheck.idempotency_claims
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON autocheck.action_definitions,
+   autocheck.action_dispatches,
+   autocheck.operations,
+   autocheck.operation_events,
+   autocheck.idempotency_claims
 TO api_owner;
 
 GRANT USAGE, SELECT
@@ -306,16 +191,16 @@ REVOKE ALL
 ON autocheck.operation_events
 FROM course_runtime;
 
-GRANT SELECT ON
-    autocheck.contract_info,
-    autocheck.action_definitions,
-    autocheck.action_dispatches
+GRANT SELECT
+ON autocheck.contract_info,
+   autocheck.action_definitions,
+   autocheck.action_dispatches
 TO course_runtime;
 
-GRANT SELECT ON
-    autocheck.operations,
-    autocheck.operation_events,
-    autocheck.idempotency_claims
+GRANT SELECT
+ON autocheck.operations,
+   autocheck.operation_events,
+   autocheck.idempotency_claims
 TO course_runtime;
 
 GRANT SELECT, INSERT, UPDATE, DELETE
@@ -324,7 +209,8 @@ TO course_cli_login;
 
 GRANT SELECT, INSERT, UPDATE, DELETE
 ON autocheck.schema_migrations
-TO course_cli_login, course_migration_login;
+TO course_cli_login,
+   course_migration_login;
 
 GRANT USAGE, SELECT
 ON ALL SEQUENCES IN SCHEMA autocheck

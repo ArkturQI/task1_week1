@@ -386,7 +386,26 @@ BEGIN
 END; $$;
 ALTER FUNCTION api.operation_get OWNER TO api_owner;
 
-GRANT EXECUTE ON FUNCTION api.invoke(text, text, integer, jsonb, jsonb) TO course_api_login, course_runtime, course_cli_login, course_migration_login;
-GRANT EXECUTE ON FUNCTION api.json_schema_validate(jsonb, jsonb) TO course_api_login, course_runtime, course_cli_login, course_migration_login;
-GRANT EXECUTE ON FUNCTION api.payment_request(jsonb, jsonb) TO course_api_login, course_runtime, course_cli_login, course_migration_login;
-GRANT EXECUTE ON FUNCTION api.operation_get(jsonb, jsonb) TO course_api_login, course_runtime, course_cli_login, course_migration_login;
+-- =====================================================================
+-- Права доступа: только course_api_login может вызывать api.invoke.
+-- Остальные функции вызываются только через api.invoke и не доступны напрямую.
+-- =====================================================================
+REVOKE ALL
+ON FUNCTION api.invoke(text, text, integer, jsonb, jsonb)
+FROM PUBLIC;
+
+REVOKE ALL
+ON FUNCTION api.json_schema_validate(jsonb, jsonb)
+FROM PUBLIC;
+
+REVOKE ALL
+ON FUNCTION api.payment_request(jsonb, jsonb)
+FROM PUBLIC;
+
+REVOKE ALL
+ON FUNCTION api.operation_get(jsonb, jsonb)
+FROM PUBLIC;
+
+GRANT EXECUTE
+ON FUNCTION api.invoke(text, text, integer, jsonb, jsonb)
+TO course_api_login;

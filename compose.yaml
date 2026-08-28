@@ -7,12 +7,117 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./docker/postgres/00_roles.sql:/docker-entrypoint-initdb.d/00_roles.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d course"]
       interval: 2s
       timeout: 3s
       retries: 15
+
+  db-bootstrap:
+    image: postgres:17
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: postgres
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+
+        psql \
+          -h postgres \
+          -U postgres \
+          -d course \
+          -v ON_ERROR_STOP=1 \
+          <<'SQL'
+
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_roles
+                WHERE rolname = 'course_runtime'
+            ) THEN
+                CREATE ROLE course_runtime NOLOGIN;
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_roles
+                WHERE rolname = 'course_api'
+            ) THEN
+                CREATE ROLE course_api NOLOGIN;
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_roles
+                WHERE rolname = 'api_owner'
+            ) THEN
+                CREATE ROLE api_owner NOLOGIN NOSUPERUSER;
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_roles
+                WHERE rolname = 'course_migration_login'
+            ) THEN
+                CREATE ROLE course_migration_login
+                    LOGIN
+                    PASSWORD 'migration_secret_change_me';
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_roles
+                WHERE rolname = 'course_api_login'
+            ) THEN
+                CREATE ROLE course_api_login
+                    LOGIN
+                    PASSWORD 'api_secret_change_me';
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_roles
+                WHERE rolname = 'course_cli_login'
+            ) THEN
+                CREATE ROLE course_cli_login
+                    LOGIN
+                    PASSWORD 'cli_secret_change_me';
+            END IF;
+        END
+        $$;
+
+        GRANT CONNECT, CREATE
+        ON DATABASE course
+        TO course_migration_login;
+
+        GRANT CONNECT
+        ON DATABASE course
+        TO course_api_login;
+
+        GRANT CONNECT, CREATE
+        ON DATABASE course
+        TO course_cli_login;
+
+        GRANT api_owner
+        TO course_migration_login
+        WITH ADMIN OPTION;
+
+        GRANT api_owner
+        TO course_cli_login
+        WITH ADMIN OPTION;
+
+        GRANT course_runtime
+        TO course_api_login;
+
+        GRANT course_api
+        TO course_cli_login;
+
+        SQL
 
   api:
     build:
@@ -25,6 +130,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      db-bootstrap:
+        condition: service_completed_successfully
 
   gateway:
     build:
@@ -35,7 +142,8 @@ services:
     environment:
       Api__BaseUrl: "http://api:8080"
     depends_on:
-      - api
+      api:
+        condition: service_started
 
   cli:
     build:
@@ -43,6 +151,11 @@ services:
       dockerfile: src/Cli/Dockerfile
     environment:
       ConnectionStrings__Course: "Host=postgres;Port=5432;Database=course;Username=course_cli_login;Password=cli_secret_change_me"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-bootstrap:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:
