@@ -1,23 +1,11 @@
 ﻿CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- =====================================================================
--- Schema and role bootstrap.
---
--- IDENTITY MODEL:
---   course_migration_login  — DDL/bootstrap only (runs once at container start)
---   course_api_login        — API runtime (EXECUTE on api.* functions)
---   course_cli_login        — publication CLI (DML on autocheck catalog)
---   api_owner               — NOLOGIN NOSUPERUSER owner of SECURITY DEFINER functions
---   course_api              — NOLOGIN publication role (inherited by CLI)
---   course_runtime          — NOLOGIN read-only role (inherited by API)
---
--- SECURITY DEFINER functions are owned by api_owner (not superuser) to enforce
--- least privilege: runtime callers can only EXECUTE, never touch tables directly.
--- =====================================================================
 CREATE SCHEMA IF NOT EXISTS autocheck;
 CREATE SCHEMA IF NOT EXISTS api;
 CREATE SCHEMA IF NOT EXISTS opencheck;
 
+-- Identity model: separate LOGIN roles for runtime / publication / migration.
+-- SECURITY DEFINER functions owned by api_owner (NOLOGIN NOSUPERUSER).
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'course_runtime') THEN
@@ -26,11 +14,9 @@ BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'course_api') THEN
         CREATE ROLE course_api NOLOGIN;
     END IF;
-    -- api_owner owns all SECURITY DEFINER functions; NOLOGIN prevents direct connection
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'api_owner') THEN
         CREATE ROLE api_owner NOLOGIN NOSUPERUSER;
     END IF;
-    -- Bootstrap role with CREATEROLE so it can create other roles and transfer ownership
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'course_migration_login') THEN
         CREATE ROLE course_migration_login WITH LOGIN PASSWORD 'migration_secret_change_me' CREATEROLE;
     END IF;
@@ -42,13 +28,18 @@ BEGIN
     END IF;
 END $$;
 
--- Migration role needs database-level privileges to bootstrap schemas and transfer ownership
+-- Ensure passwords are correct on subsequent runs (CREATE ROLE IF NOT EXISTS does not update existing passwords).
+ALTER ROLE course_api_login WITH PASSWORD 'api_secret_change_me';
+ALTER ROLE course_cli_login WITH PASSWORD 'cli_secret_change_me';
+ALTER ROLE course_migration_login WITH PASSWORD 'migration_secret_change_me';
+
+-- Bootstrap: migration role can create schemas and transfer ownership
 GRANT CONNECT, CREATE ON DATABASE course TO course_migration_login;
 GRANT api_owner TO course_migration_login;
 GRANT CREATE ON SCHEMA api TO api_owner;
 GRANT CREATE ON SCHEMA opencheck TO course_cli_login;
 
--- Role inheritance: login roles inherit privileges of group roles
+-- Role inheritance: API login reads as runtime, CLI login writes as publication
 GRANT course_runtime TO course_api_login;
 GRANT course_api TO course_cli_login;
 
@@ -56,22 +47,25 @@ GRANT USAGE ON SCHEMA autocheck TO course_runtime, course_api, api_owner, course
 GRANT USAGE ON SCHEMA api       TO course_runtime, course_api, api_owner, course_api_login, course_cli_login, course_migration_login;
 GRANT USAGE ON SCHEMA opencheck TO api_owner, course_runtime, course_cli_login, course_migration_login;
 
--- Contract metadata (version, generation timestamp)
+-- Default privileges on opencheck: functions created by fixture (900_opencheck_probe.sql)
+-- are automatically EXECUTABLE by api_owner and course_runtime.
+ALTER DEFAULT PRIVILEGES IN SCHEMA opencheck GRANT EXECUTE ON FUNCTIONS TO api_owner, course_runtime;
+ALTER DEFAULT PRIVILEGES IN SCHEMA opencheck GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO api_owner;
+ALTER DEFAULT PRIVILEGES IN SCHEMA opencheck GRANT SELECT ON TABLES TO course_runtime;
+
 CREATE TABLE IF NOT EXISTS autocheck.contract_info (
     contract_version text PRIMARY KEY,
     generated_at     timestamptz NOT NULL DEFAULT now()
 );
 INSERT INTO autocheck.contract_info (contract_version) VALUES ('course-1') ON CONFLICT DO NOTHING;
 
--- Migration tracking (filename, checksum, applied_at)
 CREATE TABLE IF NOT EXISTS autocheck.schema_migrations (
     file_name  text PRIMARY KEY,
     checksum   text NOT NULL,
     applied_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Action catalog: published manifest + routing metadata.
--- UNIQUE(module, action, version) prevents duplicate versions.
+-- Action catalog: published manifest + routing metadata
 CREATE TABLE IF NOT EXISTS autocheck.action_definitions (
     id              bigserial PRIMARY KEY,
     module          text NOT NULL,
@@ -89,14 +83,12 @@ CREATE TABLE IF NOT EXISTS autocheck.action_definitions (
     UNIQUE (module, action, version)
 );
 
--- Exactly-one default per (module, action) enforced at database level.
--- Partial unique index: only one row per (module, action) can have is_default=true.
+-- Exactly-one default per (module, action) enforced at database level
 CREATE UNIQUE INDEX IF NOT EXISTS idx_action_default_unique
     ON autocheck.action_definitions (module, action)
     WHERE is_default = true;
 
--- Dispatch log: one row per api.invoke call (observability / audit).
--- CHECK constraints enforce valid status values.
+-- Dispatch log: one row per api.invoke call (observability / audit)
 CREATE TABLE IF NOT EXISTS autocheck.action_dispatches (
     id             bigserial PRIMARY KEY,
     module         text NOT NULL,
@@ -114,8 +106,7 @@ CREATE INDEX IF NOT EXISTS ix_dispatches_route ON autocheck.action_dispatches (m
 CREATE INDEX IF NOT EXISTS ix_dispatches_request ON autocheck.action_dispatches (request_id);
 
 -- Domain operations: payment-specific projection.
--- Separate from idempotency_claims (technical dedup) to maintain independent invariants.
--- CHECK constraint enforces valid state machine transitions.
+-- Separated from idempotency_claims to maintain independent invariants.
 CREATE TABLE IF NOT EXISTS autocheck.operations (
     operation_id    uuid PRIMARY KEY,
     request_id      text NOT NULL,
@@ -138,9 +129,7 @@ CREATE TABLE IF NOT EXISTS autocheck.operations (
     UNIQUE (scope_key, idempotency_key)
 );
 
--- Domain events: one event per operation state transition.
--- FK to operations with ON DELETE RESTRICT prevents orphaned events.
--- CHECK constraint enforces valid event types.
+-- Domain events: one event per operation state transition
 CREATE TABLE IF NOT EXISTS autocheck.operation_events (
     event_id     uuid PRIMARY KEY,
     operation_id uuid NOT NULL REFERENCES autocheck.operations (operation_id) ON DELETE RESTRICT,
@@ -151,7 +140,6 @@ CREATE TABLE IF NOT EXISTS autocheck.operation_events (
 
 -- Technical idempotency storage: atomic claim before target execution.
 -- Separated from operations to keep generic idempotency independent of domain model.
--- CHECK constraint enforces valid claim states.
 CREATE TABLE IF NOT EXISTS autocheck.idempotency_claims (
     scope_key       text NOT NULL,
     idempotency_key text NOT NULL,
@@ -162,15 +150,6 @@ CREATE TABLE IF NOT EXISTS autocheck.idempotency_claims (
     completed_at    timestamptz,
     PRIMARY KEY (scope_key, idempotency_key)
 );
-
--- =====================================================================
--- GRANT PHILOSOPHY:
---   course_api (publication): full DML on catalog + runtime tables
---   api_owner (SECURITY DEFINER owner): DML on runtime tables only
---   course_runtime: SELECT only on projections, no mutations
---   course_cli_login: catalog DML + migration tracking
---   Login roles (api_login, cli_login, migration_login): only EXECUTE on functions
--- =====================================================================
 
 -- Publication role: full catalog and runtime DML
 GRANT SELECT, INSERT, UPDATE, DELETE ON

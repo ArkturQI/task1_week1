@@ -5,8 +5,8 @@ RUN dotnet publish Gateway.csproj -c Release -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
-# non-root user
-RUN adduser --disabled-password --gecos "" appuser && chown -R appuser /app
+# non-root user (useradd is available in Debian slim, adduser is not)
+RUN useradd -m -s /bin/bash appuser && chown -R appuser /app
 USER appuser
 COPY --from=build /app ./
 ENTRYPOINT ["dotnet", "Gateway.dll"]
