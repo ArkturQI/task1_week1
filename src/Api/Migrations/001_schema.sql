@@ -30,10 +30,15 @@ END $$;
 
 -- Bootstrap: migration-роль может создавать схемы и передавать владение функциями
 GRANT CONNECT, CREATE ON DATABASE course TO course_migration_login;
--- ИСПРАВЛЕНО: runtime и CLI роли тоже должны подключаться к базе
-GRANT CONNECT ON DATABASE course TO course_api_login, course_cli_login;
 
--- ИСПРАВЛЕНО: разделено на две строки для ясности
+-- API login может подключаться к базе
+GRANT CONNECT ON DATABASE course TO course_api_login;
+
+-- CLI login может подключаться к базе и выполнять CREATE SCHEMA
+-- (autocheck-миграции из autocheck/fixtures/migrations могут
+-- содержать CREATE SCHEMA IF NOT EXISTS ...)
+GRANT CONNECT, CREATE ON DATABASE course TO course_cli_login;
+
 GRANT api_owner TO course_migration_login WITH ADMIN OPTION;
 GRANT api_owner TO course_cli_login WITH ADMIN OPTION;
 
@@ -48,7 +53,7 @@ GRANT USAGE ON SCHEMA autocheck TO course_runtime, course_api, api_owner, course
 GRANT USAGE ON SCHEMA api       TO course_runtime, course_api, api_owner, course_api_login, course_cli_login, course_migration_login;
 GRANT USAGE ON SCHEMA opencheck TO api_owner, course_runtime, course_cli_login, course_migration_login;
 
--- ИСПРАВЛЕНО: CLI и migration роли должны создавать объекты в autocheck (входные миграции)
+-- CLI и migration роли должны создавать объекты в autocheck (входные миграции)
 GRANT CREATE ON SCHEMA autocheck TO course_cli_login, course_migration_login;
 
 CREATE TABLE IF NOT EXISTS autocheck.contract_info (
@@ -98,8 +103,12 @@ CREATE TABLE IF NOT EXISTS autocheck.action_dispatches (
     outcome        text,
     occurred_at    timestamptz NOT NULL DEFAULT clock_timestamp()
 );
-CREATE INDEX IF NOT EXISTS ix_dispatches_route ON autocheck.action_dispatches (module, action);
-CREATE INDEX IF NOT EXISTS ix_dispatches_request ON autocheck.action_dispatches (request_id);
+
+CREATE INDEX IF NOT EXISTS ix_dispatches_route
+    ON autocheck.action_dispatches (module, action);
+
+CREATE INDEX IF NOT EXISTS ix_dispatches_request
+    ON autocheck.action_dispatches (request_id);
 
 CREATE TABLE IF NOT EXISTS autocheck.operations (
     operation_id    uuid PRIMARY KEY,
@@ -151,6 +160,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
     autocheck.operation_events,
     autocheck.idempotency_claims
 TO course_api;
+
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA autocheck TO course_api;
 
 -- api_owner (владелец SECURITY DEFINER функций): DML на runtime-таблицы
@@ -161,15 +171,34 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
     autocheck.operation_events,
     autocheck.idempotency_claims
 TO api_owner;
+
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA autocheck TO api_owner;
 
 -- course_runtime: только чтение проекций, никаких мутаций
 REVOKE ALL ON autocheck.operations FROM course_runtime;
 REVOKE ALL ON autocheck.operation_events FROM course_runtime;
-GRANT SELECT ON autocheck.contract_info, autocheck.action_definitions, autocheck.action_dispatches TO course_runtime;
-GRANT SELECT ON autocheck.operations, autocheck.operation_events, autocheck.idempotency_claims TO course_runtime;
+
+GRANT SELECT ON
+    autocheck.contract_info,
+    autocheck.action_definitions,
+    autocheck.action_dispatches
+TO course_runtime;
+
+GRANT SELECT ON
+    autocheck.operations,
+    autocheck.operation_events,
+    autocheck.idempotency_claims
+TO course_runtime;
 
 -- CLI publication: catalog + migration tracking
-GRANT SELECT, INSERT, UPDATE, DELETE ON autocheck.action_definitions TO course_cli_login;
-GRANT SELECT, INSERT, UPDATE, DELETE ON autocheck.schema_migrations TO course_cli_login, course_migration_login;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA autocheck TO course_cli_login;
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON autocheck.action_definitions
+TO course_cli_login;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON autocheck.schema_migrations
+TO course_cli_login, course_migration_login;
+
+GRANT USAGE, SELECT
+ON ALL SEQUENCES IN SCHEMA autocheck
+TO course_cli_login;
