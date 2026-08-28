@@ -18,9 +18,7 @@ services:
       context: .
       dockerfile: src/Api/Dockerfile
     environment:
-      # Runtime: least-privilege login role
       ConnectionStrings__Course: "Host=postgres;Port=5432;Database=course;Username=course_api_login;Password=api_secret_change_me"
-      # Migration: elevated privileges for DbMigrator
       MIGRATION_CONNECTION_STRING: "Host=postgres;Port=5432;Database=course;Username=postgres;Password=postgres"
       COURSE_JWT_SIGNING_KEY: "${COURSE_JWT_SIGNING_KEY:-moduledev-week1-rotated-key-do-not-use-in-production-2026-aug}"
     depends_on:
@@ -43,7 +41,6 @@ services:
       context: .
       dockerfile: src/Cli/Dockerfile
     environment:
-      # CLI: separate login role with catalog write privileges
       ConnectionStrings__Course: "Host=postgres;Port=5432;Database=course;Username=course_cli_login;Password=cli_secret_change_me"
 
 volumes:
