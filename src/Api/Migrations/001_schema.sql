@@ -33,7 +33,9 @@ GRANT CONNECT, CREATE ON DATABASE course TO course_migration_login;
 -- ИСПРАВЛЕНО: runtime и CLI роли тоже должны подключаться к базе
 GRANT CONNECT ON DATABASE course TO course_api_login, course_cli_login;
 
-GRANT api_owner TO course_migration_login WITH ADMIN OPTION, course_cli_login WITH ADMIN OPTION;   -- <--- изменено
+-- ИСПРАВЛЕНО: разделено на две строки для ясности
+GRANT api_owner TO course_migration_login WITH ADMIN OPTION;
+GRANT api_owner TO course_cli_login WITH ADMIN OPTION;
 
 GRANT CREATE ON SCHEMA api TO api_owner;
 GRANT CREATE ON SCHEMA opencheck TO course_cli_login;
