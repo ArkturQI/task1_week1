@@ -9,5 +9,3 @@ RUN useradd -m -s /bin/bash appuser && chown -R appuser /app
 USER appuser
 COPY --from=build /app ./
 ENTRYPOINT ["dotnet", "Gateway.dll"]
-Microsoft Artifact Registry
-mcr.microsoft.com
