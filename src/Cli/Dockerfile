@@ -5,5 +5,8 @@ RUN dotnet publish Cli.csproj -c Release -o /app
 
 FROM mcr.microsoft.com/dotnet/runtime:10.0
 WORKDIR /app
+#non-root user
+RUN adduser --disabled-password --gecos "" appuser && chown -R appuser /app
+USER appuser
 COPY --from=build /app ./
 ENTRYPOINT ["dotnet", "Cli.dll"]

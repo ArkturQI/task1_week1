@@ -44,12 +44,15 @@ internal static class ManifestParser
         if (!root.TryGetProperty("response_schema", out var ss) || ss.ValueKind != JsonValueKind.Object)
         { error = "missing or invalid response_schema"; return false; }
 
+        string? targetSchema = root.TryGetProperty("target_schema", out var ts) && ts.ValueKind == JsonValueKind.String ? ts.GetString() : null;
+        string? targetFunction = root.TryGetProperty("target_function", out var tf) && tf.ValueKind == JsonValueKind.String ? tf.GetString() : null;
+        if (string.IsNullOrWhiteSpace(targetSchema)) { error = "missing or invalid target_schema"; return false; }
+        if (string.IsNullOrWhiteSpace(targetFunction)) { error = "missing or invalid target_function"; return false; }
+
         var enabled = !root.TryGetProperty("enabled", out var en) || en.ValueKind != JsonValueKind.False;
         var isDefault = root.TryGetProperty("is_default", out var id) && id.ValueKind == JsonValueKind.True;
 
         var httpMethod = root.TryGetProperty("http_method", out var hm) && hm.ValueKind == JsonValueKind.String ? hm.GetString() : "POST";
-        var targetSchema = root.TryGetProperty("target_schema", out var ts) && ts.ValueKind == JsonValueKind.String ? ts.GetString() : "";
-        var targetFunction = root.TryGetProperty("target_function", out var tf) && tf.ValueKind == JsonValueKind.String ? tf.GetString() : "";
         var outcomes = root.TryGetProperty("outcomes", out var o) && o.ValueKind == JsonValueKind.Array ? o.GetRawText() : "[]";
 
         info = new ManifestInfo
@@ -63,8 +66,8 @@ internal static class ManifestParser
             IsDefault = isDefault,
             ManifestSize = content.Length,
             HttpMethod = httpMethod ?? "POST",
-            TargetSchema = targetSchema ?? "",
-            TargetFunction = targetFunction ?? "",
+            TargetSchema = targetSchema!,
+            TargetFunction = targetFunction!,
             Outcomes = outcomes
         };
         error = null;

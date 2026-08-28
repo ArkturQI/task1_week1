@@ -18,7 +18,9 @@ services:
       context: .
       dockerfile: src/Api/Dockerfile
     environment:
-      ConnectionStrings__Course: "Host=postgres;Port=5432;Database=course;Username=postgres;Password=postgres"
+      ConnectionStrings__Course: "Host=postgres;Port=5432;Database=course;Username=course_api_login;Password=api_secret_change_me"
+      COURSE_JWT_SIGNING_KEY: "${COURSE_JWT_SIGNING_KEY:-moduledev-week1-rotated-key-do-not-use-in-production-2026-aug}"
+      MIGRATION_CONNECTION_STRING: "Host=postgres;Port=5432;Database=course;Username=postgres;Password=postgres"
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,7 +41,7 @@ services:
       context: .
       dockerfile: src/Cli/Dockerfile
     environment:
-      ConnectionStrings__Course: "Host=postgres;Port=5432;Database=course;Username=postgres;Password=postgres"
+      ConnectionStrings__Course: "Host=postgres;Port=5432;Database=course;Username=course_cli_login;Password=cli_secret_change_me"
 
 volumes:
   pgdata:

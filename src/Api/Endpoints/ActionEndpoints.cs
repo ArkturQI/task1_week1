@@ -28,9 +28,18 @@ public static class ActionEndpoints
             try { using var _ = JsonDocument.Parse(body); }
             catch { return Results.Json(new { status = "error", code = "request.invalid", message = "body is not valid JSON" }, statusCode: 400); }
 
+            // ИСПРАВЛЕНО: строгая валидация X-Action-Version
             int? version = null;
-            if (http.Request.Headers.TryGetValue("X-Action-Version", out var vh) && int.TryParse(vh, out var vv))
+            if (http.Request.Headers.TryGetValue("X-Action-Version", out var vh))
+            {
+                if (!int.TryParse(vh.ToString(), out var vv) || vv < 1)
+                {
+                    return Results.Json(
+                        new { status = "error", code = "request.invalid", message = "X-Action-Version must be a positive integer", meta = new { correlationId = Guid.NewGuid().ToString() } },
+                        statusCode: 400);
+                }
                 version = vv;
+            }
 
             var idempotencyKey = http.Request.Headers["Idempotency-Key"].FirstOrDefault();
 
@@ -39,7 +48,6 @@ public static class ActionEndpoints
             {
                 await using var conn = new NpgsqlConnection(connStr);
                 await conn.OpenAsync(ct);
-                // ИСПРАВЛЕНО: убрано _tbl
                 var sql = version.HasValue
                     ? "SELECT module, action, version, manifest::text, enabled, is_default FROM autocheck.action_definitions WHERE module = @m AND action = @a AND version = @v AND enabled LIMIT 1"
                     : "SELECT module, action, version, manifest::text, enabled, is_default FROM autocheck.action_definitions WHERE module = @m AND action = @a AND is_default = true AND enabled LIMIT 1";
@@ -137,14 +145,21 @@ public static class ActionEndpoints
                 await using var conn = new NpgsqlConnection(connStr);
                 await conn.OpenAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
+
+                // ИСПРАВЛЕНО: linked command timeout + cancellation
+                var remainingMs = Math.Max(1, (int)(deadline - DateTime.UtcNow).TotalMilliseconds);
                 await using var cmd = new NpgsqlCommand("SELECT api.invoke(@m, @a, @v, @ctx::jsonb, @p::jsonb)::text", conn, tx);
+                cmd.CommandTimeout = Math.Max(1, remainingMs / 1000);
                 cmd.Parameters.AddWithValue("m", module);
                 cmd.Parameters.AddWithValue("a", action);
                 cmd.Parameters.AddWithValue("v", version is null ? DBNull.Value : version);
                 cmd.Parameters.AddWithValue("ctx", context.ToJsonString());
                 cmd.Parameters.AddWithValue("p", body);
 
-                var scalar = await cmd.ExecuteScalarAsync(ct) as string ?? "{}";
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(remainingMs);
+
+                var scalar = await cmd.ExecuteScalarAsync(cts.Token) as string ?? "{}";
                 raw = scalar;
 
                 using var doc = JsonDocument.Parse(raw);
@@ -182,10 +197,11 @@ public static class ActionEndpoints
                 if (responseSchema.ValueKind == JsonValueKind.Object)
                 {
                     await using var cmd2 = new NpgsqlCommand("SELECT api.json_schema_validate(@schema::jsonb, @result::jsonb)::text", conn, tx);
+                    cmd2.CommandTimeout = Math.Max(1, (int)(deadline - DateTime.UtcNow).TotalSeconds);
                     cmd2.Parameters.AddWithValue("schema", responseSchema.GetRawText());
                     var resultElement = root.TryGetProperty("result", out var re) ? re.GetRawText() : "{}";
                     cmd2.Parameters.AddWithValue("result", resultElement);
-                    var validationRaw = await cmd2.ExecuteScalarAsync(ct) as string ?? "{}";
+                    var validationRaw = await cmd2.ExecuteScalarAsync(cts.Token) as string ?? "{}";
                     using var vdoc = JsonDocument.Parse(validationRaw);
                     if (vdoc.RootElement.TryGetProperty("valid", out var valid) && valid.GetBoolean() == false)
                     {

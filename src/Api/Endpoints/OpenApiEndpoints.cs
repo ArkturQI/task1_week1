@@ -59,6 +59,50 @@ public static class OpenApiEndpoints
             }
         };
 
+        // ИСПРАВЛЕНО: envelope с status, outcome, result, meta
+        var envelopeSchema = new Dictionary<string, object>
+        {
+            ["type"] = "object",
+            ["required"] = new[] { "status", "outcome", "result", "meta" },
+            ["properties"] = new Dictionary<string, object>
+            {
+                ["status"] = new Dictionary<string, object> { ["type"] = "string", ["enum"] = new[] { "ok" } },
+                ["outcome"] = new Dictionary<string, object> { ["type"] = "string" },
+                ["result"] = d.ResponseSchema.ValueKind == JsonValueKind.Object ? (object)d.ResponseSchema.Clone() : new Dictionary<string, object>(),
+                ["meta"] = new Dictionary<string, object>
+                {
+                    ["type"] = "object",
+                    ["properties"] = new Dictionary<string, object>
+                    {
+                        ["correlationId"] = new Dictionary<string, object> { ["type"] = "string" },
+                        ["actionVersion"] = new Dictionary<string, object> { ["type"] = "integer" }
+                    }
+                }
+            }
+        };
+
+        var errorEnvelope = new Dictionary<string, object>
+        {
+            ["type"] = "object",
+            ["required"] = new[] { "status", "code", "message", "meta" },
+            ["properties"] = new Dictionary<string, object>
+            {
+                ["status"] = new Dictionary<string, object> { ["type"] = "string", ["enum"] = new[] { "error" } },
+                ["code"] = new Dictionary<string, object> { ["type"] = "string" },
+                ["message"] = new Dictionary<string, object> { ["type"] = "string" },
+                ["retryable"] = new Dictionary<string, object> { ["type"] = "boolean" },
+                ["meta"] = new Dictionary<string, object>
+                {
+                    ["type"] = "object",
+                    ["properties"] = new Dictionary<string, object>
+                    {
+                        ["correlationId"] = new Dictionary<string, object> { ["type"] = "string" },
+                        ["actionVersion"] = new Dictionary<string, object> { ["type"] = "integer" }
+                    }
+                }
+            }
+        };
+
         var responses = new Dictionary<string, object>
         {
             ["200"] = new Dictionary<string, object>
@@ -68,7 +112,18 @@ public static class OpenApiEndpoints
                 {
                     ["application/json"] = new Dictionary<string, object>
                     {
-                        ["schema"] = d.ResponseSchema.ValueKind == JsonValueKind.Object ? (object)d.ResponseSchema.Clone() : new Dictionary<string, object>()
+                        ["schema"] = envelopeSchema
+                    }
+                }
+            },
+            ["default"] = new Dictionary<string, object>
+            {
+                ["description"] = "error response",
+                ["content"] = new Dictionary<string, object>
+                {
+                    ["application/json"] = new Dictionary<string, object>
+                    {
+                        ["schema"] = errorEnvelope
                     }
                 }
             }
@@ -97,7 +152,6 @@ public static class OpenApiEndpoints
         var list = new List<ActionDef>();
         await using var conn = new NpgsqlConnection(connStr);
         await conn.OpenAsync(ct);
-        // ИСПРАВЛЕНО: убрано _tbl
         await using var cmd = new NpgsqlCommand(
             "SELECT module, action, version, manifest::text, enabled, is_default FROM autocheck.action_definitions ORDER BY module, action, version", conn);
         await using var reader = await cmd.ExecuteReaderAsync(ct);

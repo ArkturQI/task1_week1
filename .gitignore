@@ -8,3 +8,8 @@
 !.env.example
 *.log
 week-1-public-report.json
+*.tracked.json
+*report*.json
+*.trx
+*.sarif
+scratch/

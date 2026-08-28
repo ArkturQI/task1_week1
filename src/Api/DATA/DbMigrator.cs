@@ -7,11 +7,14 @@ namespace Api.DATA
     {
         public static async Task MigrateAsync(string connStr, ILogger logger)
         {
+            // ИСПРАВЛЕНО: allow separate migration connection string for least-privilege runtime
+            var migrationConnStr = Environment.GetEnvironmentVariable("MIGRATION_CONNECTION_STRING") ?? connStr;
+
             for (var attempt = 1; ; attempt++)
             {
                 try
                 {
-                    await using var conn = new NpgsqlConnection(connStr);
+                    await using var conn = new NpgsqlConnection(migrationConnStr);
                     await conn.OpenAsync();
 
                     var migrationsDir = Path.Combine(AppContext.BaseDirectory, "Migrations");
