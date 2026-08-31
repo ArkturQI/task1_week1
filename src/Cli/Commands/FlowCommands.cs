@@ -827,17 +827,16 @@ internal static class FlowCommands
         return errors;
     }
 
+    // ЗАМЕНЁННЫЙ ValidateTransitionCoverage
     private static List<string> ValidateTransitionCoverage(
         WorkflowMap map,
         Dictionary<string, WorkflowStep> steps)
     {
-        var errors =
-            new List<string>();
+        var errors = new List<string>();
 
         var grouped =
             map.Transitions
-                .GroupBy(
-                    t => (t.From, t.Outcome));
+                .GroupBy(t => (t.From, t.Outcome));
 
         foreach (var group in grouped)
         {
@@ -853,22 +852,32 @@ internal static class FlowCommands
             if (step.Type == "automatic" &&
                 step.Task is not null)
             {
-                // Exact outcome coverage is checked against action catalog later.
+                // Для automatic step полный набор outcomes
+                // проверяется отдельно через action catalog.
                 continue;
             }
 
-            var required =
-                step.Type switch
+            List<string> required;
+
+            if (step.Type == "wait_signal" &&
+                !string.IsNullOrWhiteSpace(step.Outcome))
+            {
+                required = new List<string>
                 {
-                    "wait_signal" when step.Outcome is not null =>
-                        new[] { step.Outcome },
-
-                    "manual" =>
-                        step.AllowedOutcomes ?? [],
-
-                    _ =>
-                        Array.Empty<string>()
+                    step.Outcome!
                 };
+            }
+            else if (step.Type == "manual")
+            {
+                required =
+                    step.AllowedOutcomes is not null
+                        ? new List<string>(step.AllowedOutcomes)
+                        : new List<string>();
+            }
+            else
+            {
+                required = new List<string>();
+            }
 
             foreach (var outcome in required)
             {
@@ -881,6 +890,178 @@ internal static class FlowCommands
                 {
                     errors.Add(
                         $"step {step.Key} requires exactly one transition for outcome {outcome}");
+                }
+            }
+        }
+
+        return errors;
+    }
+
+    // НОВАЯ ВЕРСИЯ ValidateTaskLocalRules (полностью заменена)
+    private static List<string> ValidateTaskLocalRules(
+        WorkflowMap map)
+    {
+        var errors =
+            new List<string>();
+
+        foreach (var step in map.Steps.Where(
+                     s => s.Type == "automatic" &&
+                          s.Task is not null))
+        {
+            var task = step.Task!;
+
+            if (!string.Equals(
+                    task.Service,
+                    "postgres",
+                    StringComparison.Ordinal))
+            {
+                errors.Add(
+                    $"unsupported task service: {task.Service}");
+            }
+
+            if (task.TimeoutMs < 1 ||
+                task.TimeoutMs > 30000)
+            {
+                errors.Add(
+                    $"invalid timeout_ms for step {step.Key}");
+            }
+
+            if (task.Retry.MaxAttempts < 1 ||
+                task.Retry.MaxAttempts > 10)
+            {
+                errors.Add(
+                    $"invalid retry.max_attempts for step {step.Key}");
+            }
+
+            if (task.Retry.DelaysMs.Count !=
+                Math.Max(
+                    0,
+                    task.Retry.MaxAttempts - 1))
+            {
+                errors.Add(
+                    $"retry.delays_ms count must equal max_attempts - 1 for step {step.Key}");
+            }
+
+            if (task.Retry.DelaysMs.Any(
+                    delay => delay < 0 ||
+                             delay > 30000))
+            {
+                errors.Add(
+                    $"invalid retry delay for step {step.Key}");
+            }
+
+            /*
+             * input_mapping:
+             *
+             *   target payload pointer -> source process-data pointer
+             *
+             * Например:
+             *
+             *   "/value" -> "/subject"
+             *
+             * Оба значения являются RFC 6901 JSON Pointers.
+             */
+            foreach (var pair in task.InputMapping)
+            {
+                if (!IsValidJsonPointer(pair.Key))
+                {
+                    errors.Add(
+                        $"invalid target JSON Pointer: {pair.Key}");
+                }
+
+                if (!IsValidJsonPointer(pair.Value))
+                {
+                    errors.Add(
+                        $"invalid source JSON Pointer: {pair.Value}");
+                }
+            }
+
+            /*
+             * input_constants:
+             *
+             * Это обычный JSON object.
+             *
+             * Ключи НЕ являются JSON Pointers.
+             *
+             * При построении payload каждый key становится
+             * top-level property:
+             *
+             *   "marker": "value"
+             *
+             * эквивалентно target pointer:
+             *
+             *   "/marker"
+             *
+             * Поэтому для проверки overlap переводим key
+             * в соответствующий top-level pointer.
+             */
+            foreach (var key in task.InputConstants.Keys)
+            {
+                if (string.IsNullOrWhiteSpace(key))
+                {
+                    errors.Add(
+                        $"input_constants contains an empty key in step {step.Key}");
+                }
+            }
+
+            /*
+             * Проверяем пересечения target mappings
+             * между собой и с input_constants.
+             *
+             * /a пересекается с /a/b
+             * /a не пересекается с /ab
+             */
+            var targetPointers =
+                new List<(string Pointer, string Source)>();
+
+            foreach (var pair in task.InputMapping)
+            {
+                targetPointers.Add(
+                    (
+                        pair.Key,
+                        "input_mapping"
+                    ));
+            }
+
+            foreach (var constantKey in task.InputConstants.Keys)
+            {
+                /*
+                 * input_constants является top-level JSON object,
+                 * поэтому key преобразуется в /key.
+                 *
+                 * Для RFC 6901 экранируем ~ и /.
+                 */
+                var escapedKey =
+                    constantKey
+                        .Replace("~", "~0")
+                        .Replace("/", "~1");
+
+                targetPointers.Add(
+                    (
+                        "/" + escapedKey,
+                        "input_constants"
+                    ));
+            }
+
+            for (var i = 0;
+                 i < targetPointers.Count;
+                 i++)
+            {
+                for (var j = i + 1;
+                     j < targetPointers.Count;
+                     j++)
+                {
+                    if (JsonPointersOverlap(
+                            targetPointers[i].Pointer,
+                            targetPointers[j].Pointer))
+                    {
+                        errors.Add(
+                            $"overlapping target mappings: " +
+                            $"{targetPointers[i].Pointer} " +
+                            $"({targetPointers[i].Source}) and " +
+                            $"{targetPointers[j].Pointer} " +
+                            $"({targetPointers[j].Source})");
+                    }
                 }
             }
         }
@@ -987,95 +1168,6 @@ internal static class FlowCommands
             {
                 errors.Add(
                     $"non-end step has no outgoing transition: {step.Key}");
-            }
-        }
-
-        return errors;
-    }
-
-    private static List<string> ValidateTaskLocalRules(
-        WorkflowMap map)
-    {
-        var errors =
-            new List<string>();
-
-        foreach (var step in map.Steps.Where(
-                     s => s.Type == "automatic" &&
-                          s.Task is not null))
-        {
-            var task = step.Task!;
-
-            if (task.Service != "postgres")
-            {
-                errors.Add(
-                    $"unsupported task service: {task.Service}");
-            }
-
-            if (task.TimeoutMs < 1 ||
-                task.TimeoutMs > 30000)
-            {
-                errors.Add(
-                    $"invalid timeout_ms for step {step.Key}");
-            }
-
-            if (task.Retry.MaxAttempts < 1 ||
-                task.Retry.MaxAttempts > 10)
-            {
-                errors.Add(
-                    $"invalid retry.max_attempts for step {step.Key}");
-            }
-
-            if (task.Retry.DelaysMs.Count !=
-                Math.Max(0, task.Retry.MaxAttempts - 1))
-            {
-                errors.Add(
-                    $"retry.delays_ms count must equal max_attempts - 1 for step {step.Key}");
-            }
-
-            if (task.Retry.DelaysMs.Any(
-                    delay => delay < 0 || delay > 30000))
-            {
-                errors.Add(
-                    $"invalid retry delay for step {step.Key}");
-            }
-
-            foreach (var pointer in task.InputMapping.Keys
-                         .Concat(task.InputConstants.Keys))
-            {
-                if (!IsValidJsonPointer(pointer))
-                {
-                    errors.Add(
-                        $"invalid JSON Pointer: {pointer}");
-                }
-            }
-
-            foreach (var pair in task.InputMapping)
-            {
-                if (!IsValidJsonPointer(pair.Value))
-                {
-                    errors.Add(
-                        $"invalid JSON Pointer source: {pair.Value}");
-                }
-            }
-
-            var targets =
-                task.InputMapping.Keys
-                    .Concat(task.InputConstants.Keys)
-                    .Distinct(StringComparer.Ordinal)
-                    .ToList();
-
-            for (var i = 0; i < targets.Count; i++)
-            {
-                for (var j = i + 1; j < targets.Count; j++)
-                {
-                    if (JsonPointersOverlap(
-                            targets[i],
-                            targets[j]))
-                    {
-                        errors.Add(
-                            $"overlapping target mappings: {targets[i]} and {targets[j]}");
-                    }
-                }
             }
         }
 

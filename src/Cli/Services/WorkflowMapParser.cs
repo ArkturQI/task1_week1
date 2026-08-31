@@ -11,12 +11,14 @@ internal static class WorkflowMapParser
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = false,
-        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
+        UnmappedMemberHandling =
+            JsonUnmappedMemberHandling.Disallow
     };
 
     private static readonly IDeserializer YamlDeserializer =
         new DeserializerBuilder()
-            .WithNamingConvention(UnderscoredNamingConvention.Instance)
+            .WithNamingConvention(
+                UnderscoredNamingConvention.Instance)
             .Build();
 
     public static bool TryParse(
@@ -37,7 +39,10 @@ internal static class WorkflowMapParser
         {
             string content;
 
-            if (file == "/dev/stdin")
+            if (string.Equals(
+                    file,
+                    "/dev/stdin",
+                    StringComparison.Ordinal))
             {
                 content = Console.In.ReadToEnd();
             }
@@ -64,7 +69,9 @@ internal static class WorkflowMapParser
 
             if (extension is ".yaml" or ".yml")
             {
-                map = YamlDeserializer.Deserialize<WorkflowMap>(content);
+                map =
+                    YamlDeserializer.Deserialize<WorkflowMap>(
+                        content);
 
                 if (map is null)
                 {
@@ -75,9 +82,10 @@ internal static class WorkflowMapParser
                 return true;
             }
 
-            map = JsonSerializer.Deserialize<WorkflowMap>(
-                content,
-                JsonOptions);
+            map =
+                JsonSerializer.Deserialize<WorkflowMap>(
+                    content,
+                    JsonOptions);
 
             if (map is null)
             {
@@ -85,13 +93,17 @@ internal static class WorkflowMapParser
                 return false;
             }
 
-            AttachRawElements(map, content);
+            AttachRawElements(
+                map,
+                content);
 
             return true;
         }
         catch (Exception ex)
         {
-            error = $"invalid workflow map: {ex.Message}";
+            error =
+                $"invalid workflow map: {ex.Message}";
+
             return false;
         }
     }
@@ -114,13 +126,15 @@ internal static class WorkflowMapParser
             return;
         }
 
-        for (var i = 0; i < map.Steps.Count; i++)
+        for (var i = 0;
+             i < map.Steps.Count;
+             i++)
         {
-            if (i < steps.GetArrayLength())
-            {
-                map.Steps[i].Raw =
-                    steps[i].Clone();
-            }
+            if (i >= steps.GetArrayLength())
+                break;
+
+            map.Steps[i].Raw =
+                steps[i].Clone();
         }
     }
 }
