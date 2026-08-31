@@ -65,7 +65,14 @@ internal static class WorkflowMapParser
             if (extension is ".yaml" or ".yml")
             {
                 map = YamlDeserializer.Deserialize<WorkflowMap>(content);
-                return map is not null;
+
+                if (map is null)
+                {
+                    error = "workflow map is empty";
+                    return false;
+                }
+
+                return true;
             }
 
             map = JsonSerializer.Deserialize<WorkflowMap>(
@@ -101,7 +108,8 @@ internal static class WorkflowMapParser
 
         if (!root.TryGetProperty(
                 "steps",
-                out var steps))
+                out var steps) ||
+            steps.ValueKind != JsonValueKind.Array)
         {
             return;
         }
