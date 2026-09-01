@@ -1242,6 +1242,28 @@ TO course_api_login,
    course_cli_login,
    course_migration_login;
 
+-- ============================================================
+-- API / CLI access to workflow runtime tables
+-- ============================================================
+
+GRANT SELECT, INSERT, UPDATE
+ON workflow.process_instances,
+   workflow.step_instances,
+   workflow.jobs
+TO course_cli_login;
+
+GRANT SELECT, INSERT
+ON workflow.signals
+TO course_cli_login;
+
+GRANT SELECT, INSERT
+ON workflow.events
+TO course_cli_login;
+
+GRANT SELECT
+ON workflow.task_attempts
+TO course_cli_login;
+
 GRANT SELECT
 ON workflow.process_instances,
    workflow.step_instances,
@@ -1250,7 +1272,6 @@ ON workflow.process_instances,
    workflow.signals,
    workflow.events
 TO course_api_login,
-   course_cli_login,
    course_migration_login;
 
 -- ============================================================

@@ -31,119 +31,570 @@ internal static class FlowRuntimeCommands
                 dataError!);
         }
 
-        await using var conn =
-            new NpgsqlConnection(Database.ConnStr());
-
-        await conn.OpenAsync();
-
-        await using var tx =
-            await conn.BeginTransactionAsync();
-
         try
         {
-            await using var versionCommand =
-                new NpgsqlCommand(
-                    """
-                    SELECT
-                        fv.flow_id,
-                        fv.flow_version_id,
-                        fv.flow_version,
-                        fv.map
-                    FROM workflow.flow_versions fv
-                    WHERE fv.flow_name = @flowName
-                      AND fv.status = 'PUBLISHED'
-                      AND fv.is_active = true
-                    LIMIT 1
-                    """,
-                    conn,
-                    tx);
+            await using var conn =
+                new NpgsqlConnection(Database.ConnStr());
 
-            versionCommand.Parameters.AddWithValue(
-                "flowName",
-                flowName!);
+            await conn.OpenAsync();
 
-            await using var versionReader =
-                await versionCommand.ExecuteReaderAsync();
+            await using var tx =
+                await conn.BeginTransactionAsync();
 
-            if (!await versionReader.ReadAsync())
+            try
             {
-                await versionReader.DisposeAsync();
-                await tx.RollbackAsync();
+                // ========================================================
+                // 1. Resolve active flow version
+                // ========================================================
 
-                return Fail(
-                    "flow.not_active",
-                    "no active workflow version");
-            }
+                Guid flowId;
+                Guid flowVersionId;
+                int flowVersion;
+                string mapJson;
 
-            var flowId =
-                versionReader.GetGuid(0);
-
-            var flowVersionId =
-                versionReader.GetGuid(1);
-
-            var flowVersion =
-                versionReader.GetInt32(2);
-
-            var mapDocument =
-                versionReader.GetFieldValue<JsonDocument>(3);
-
-            await versionReader.DisposeAsync();
-
-            await using var existingProcessCommand =
-                new NpgsqlCommand(
-                    """
-                    SELECT
-                        process_id,
-                        flow_version,
-                        state,
-                        data
-                    FROM workflow.process_instances
-                    WHERE flow_name = @flowName
-                      AND business_key = @businessKey
-                    LIMIT 1
-                    """,
-                    conn,
-                    tx);
-
-            existingProcessCommand.Parameters.AddWithValue(
-                "flowName",
-                flowName!);
-
-            existingProcessCommand.Parameters.AddWithValue(
-                "businessKey",
-                businessKey!);
-
-            await using var existingReader =
-                await existingProcessCommand.ExecuteReaderAsync();
-
-            if (await existingReader.ReadAsync())
-            {
-                var existingProcessId =
-                    existingReader.GetGuid(0);
-
-                var existingVersion =
-                    existingReader.GetInt32(1);
-
-                var existingState =
-                    existingReader.GetString(2);
-
-                var existingData =
-                    existingReader.GetFieldValue<JsonDocument>(3);
-
-                await existingReader.DisposeAsync();
-
-                if (!JsonDocumentsEqual(
-                        existingData,
-                        data))
+                await using (
+                    var command = new NpgsqlCommand(
+                        """
+                        SELECT
+                            fv.flow_id,
+                            fv.flow_version_id,
+                            fv.flow_version,
+                            fv.map::text
+                        FROM workflow.flow_versions fv
+                        WHERE fv.flow_name = @flowName
+                          AND fv.status = 'PUBLISHED'
+                          AND fv.is_active = true
+                        LIMIT 1
+                        """,
+                        conn,
+                        tx))
                 {
-                    await tx.RollbackAsync();
+                    command.Parameters.AddWithValue(
+                        "flowName",
+                        flowName!);
 
-                    return Fail(
-                        "flow.conflict",
-                        "business key already belongs to a different process payload");
+                    await using var reader =
+                        await command.ExecuteReaderAsync();
+
+                    if (!await reader.ReadAsync())
+                    {
+                        return await RollbackAndFailAsync(
+                            tx,
+                            "flow.not_active",
+                            "no active workflow version");
+                    }
+
+                    flowId =
+                        reader.GetGuid(0);
+
+                    flowVersionId =
+                        reader.GetGuid(1);
+
+                    flowVersion =
+                        reader.GetInt32(2);
+
+                    mapJson =
+                        reader.GetString(3);
                 }
 
-                await tx.RollbackAsync();
+                // ========================================================
+                // 2. Check existing business key
+                // ========================================================
+
+                await using (
+                    var command = new NpgsqlCommand(
+                        """
+                        SELECT
+                            process_id,
+                            flow_version,
+                            state,
+                            data::text
+                        FROM workflow.process_instances
+                        WHERE flow_name = @flowName
+                          AND business_key = @businessKey
+                        LIMIT 1
+                        """,
+                        conn,
+                        tx))
+                {
+                    command.Parameters.AddWithValue(
+                        "flowName",
+                        flowName!);
+
+                    command.Parameters.AddWithValue(
+                        "businessKey",
+                        businessKey!);
+
+                    await using var reader =
+                        await command.ExecuteReaderAsync();
+
+                    if (await reader.ReadAsync())
+                    {
+                        var existingProcessId =
+                            reader.GetGuid(0);
+
+                        var existingVersion =
+                            reader.GetInt32(1);
+
+                        var existingState =
+                            reader.GetString(2);
+
+                        var existingDataJson =
+                            reader.GetString(3);
+
+                        var existingData =
+                            JsonDocument.Parse(
+                                existingDataJson);
+
+                        var sameData =
+                            JsonDocumentsEqual(
+                                existingData,
+                                data);
+
+                        existingData.Dispose();
+
+                        if (!sameData)
+                        {
+                            await reader.DisposeAsync();
+                            return await RollbackAndFailAsync(
+                                tx,
+                                "flow.conflict",
+                                "business key already belongs to a different process payload");
+                        }
+
+                        await reader.DisposeAsync();
+
+                        await tx.RollbackAsync();
+
+                        Console.WriteLine(
+                            Envelope.Ok(
+                                new
+                                {
+                                    resource = "process",
+                                    operation = "started",
+                                    processId =
+                                        existingProcessId.ToString(),
+                                    flowName,
+                                    flowVersion =
+                                        existingVersion,
+                                    state =
+                                        existingState
+                                }));
+
+                        return 0;
+                    }
+                }
+
+                // ========================================================
+                // 3. Parse pinned workflow map
+                // ========================================================
+
+                using var mapDocument =
+                    JsonDocument.Parse(mapJson);
+
+                var startStepKey =
+                    GetRequiredString(
+                        mapDocument.RootElement,
+                        "start_step");
+
+                // ========================================================
+                // 4. Create process instance
+                // ========================================================
+
+                var processId =
+                    Guid.NewGuid();
+
+                await using (
+                    var command = new NpgsqlCommand(
+                        """
+                        INSERT INTO workflow.process_instances(
+                            process_id,
+                            flow_id,
+                            flow_version_id,
+                            flow_name,
+                            flow_version,
+                            business_key,
+                            state,
+                            current_step_key,
+                            data
+                        )
+                        VALUES (
+                            @processId,
+                            @flowId,
+                            @flowVersionId,
+                            @flowName,
+                            @flowVersion,
+                            @businessKey,
+                            'RUNNING',
+                            @currentStepKey,
+                            @data::jsonb
+                        )
+                        """,
+                        conn,
+                        tx))
+                {
+                    command.Parameters.AddWithValue(
+                        "processId",
+                        processId);
+
+                    command.Parameters.AddWithValue(
+                        "flowId",
+                        flowId);
+
+                    command.Parameters.AddWithValue(
+                        "flowVersionId",
+                        flowVersionId);
+
+                    command.Parameters.AddWithValue(
+                        "flowName",
+                        flowName!);
+
+                    command.Parameters.AddWithValue(
+                        "flowVersion",
+                        flowVersion);
+
+                    command.Parameters.AddWithValue(
+                        "businessKey",
+                        businessKey!);
+
+                    command.Parameters.AddWithValue(
+                        "currentStepKey",
+                        startStepKey);
+
+                    command.Parameters.AddWithValue(
+                        "data",
+                        data.RootElement.GetRawText());
+
+                    await command.ExecuteNonQueryAsync();
+                }
+
+                // ========================================================
+                // 5. Load start step
+                // ========================================================
+
+                Guid stepDefinitionId;
+                string stepKey;
+                string stepType;
+                string stepConfigJson;
+
+                await using (
+                    var command = new NpgsqlCommand(
+                        """
+                        SELECT
+                            sd.step_definition_id,
+                            sd.step_key,
+                            sd.step_type,
+                            sd.step_config::text
+                        FROM workflow.step_definitions sd
+                        WHERE sd.flow_version_id = @flowVersionId
+                          AND sd.step_key = @stepKey
+                        LIMIT 1
+                        """,
+                        conn,
+                        tx))
+                {
+                    command.Parameters.AddWithValue(
+                        "flowVersionId",
+                        flowVersionId);
+
+                    command.Parameters.AddWithValue(
+                        "stepKey",
+                        startStepKey);
+
+                    await using var reader =
+                        await command.ExecuteReaderAsync();
+
+                    if (!await reader.ReadAsync())
+                    {
+                        await reader.DisposeAsync();
+
+                        return await RollbackAndFailAsync(
+                            tx,
+                            "flow.invalid_definition",
+                            "start step definition not found");
+                    }
+
+                    stepDefinitionId =
+                        reader.GetGuid(0);
+
+                    stepKey =
+                        reader.GetString(1);
+
+                    stepType =
+                        reader.GetString(2);
+
+                    stepConfigJson =
+                        reader.GetString(3);
+                }
+
+                // ========================================================
+                // 6. Create step instance
+                // ========================================================
+
+                var stepInstanceId =
+                    Guid.NewGuid();
+
+                var stepState =
+                    stepType switch
+                    {
+                        "automatic" => "READY",
+                        "wait_signal" => "WAITING",
+                        "manual" => "WAITING",
+                        "end" => "COMPLETED",
+                        _ => null
+                    };
+
+                var processState =
+                    stepType switch
+                    {
+                        "automatic" => "RUNNING",
+                        "wait_signal" => "WAITING_SIGNAL",
+                        "manual" => "WAITING_MANUAL",
+                        "end" => "COMPLETED",
+                        _ => null
+                    };
+
+                if (stepState is null ||
+                    processState is null)
+                {
+                    return await RollbackAndFailAsync(
+                        tx,
+                        "flow.invalid_definition",
+                        $"unsupported start step type: {stepType}");
+                }
+
+                await using (
+                    var command = new NpgsqlCommand(
+                        """
+                        INSERT INTO workflow.step_instances(
+                            step_instance_id,
+                            process_id,
+                            step_key,
+                            step_type,
+                            state
+                        )
+                        VALUES (
+                            @stepInstanceId,
+                            @processId,
+                            @stepKey,
+                            @stepType,
+                            @state
+                        )
+                        """,
+                        conn,
+                        tx))
+                {
+                    command.Parameters.AddWithValue(
+                        "stepInstanceId",
+                        stepInstanceId);
+
+                    command.Parameters.AddWithValue(
+                        "processId",
+                        processId);
+
+                    command.Parameters.AddWithValue(
+                        "stepKey",
+                        stepKey);
+
+                    command.Parameters.AddWithValue(
+                        "stepType",
+                        stepType.ToUpperInvariant());
+
+                    command.Parameters.AddWithValue(
+                        "state",
+                        stepState);
+
+                    await command.ExecuteNonQueryAsync();
+                }
+
+                // ========================================================
+                // 7. Automatic start -> READY job
+                // ========================================================
+
+                if (stepType == "automatic")
+                {
+                    int taskExists;
+
+                    await using (
+                        var command = new NpgsqlCommand(
+                            """
+                            SELECT COUNT(*)
+                            FROM workflow.task_definitions
+                            WHERE step_definition_id =
+                                  @stepDefinitionId
+                            """,
+                            conn,
+                            tx))
+                    {
+                        command.Parameters.AddWithValue(
+                            "stepDefinitionId",
+                            stepDefinitionId);
+
+                        taskExists =
+                            Convert.ToInt32(
+                                await command.ExecuteScalarAsync());
+                    }
+
+                    if (taskExists != 1)
+                    {
+                        return await RollbackAndFailAsync(
+                            tx,
+                            "flow.invalid_definition",
+                            "automatic start step must have exactly one task definition");
+                    }
+
+                    await using (
+                        var command = new NpgsqlCommand(
+                            """
+                            INSERT INTO workflow.jobs(
+                                job_id,
+                                process_id,
+                                step_instance_id,
+                                execution_id,
+                                state,
+                                lease_version,
+                                attempt_count,
+                                failure_count,
+                                next_attempt_at
+                            )
+                            VALUES (
+                                gen_random_uuid(),
+                                @processId,
+                                @stepInstanceId,
+                                gen_random_uuid(),
+                                'READY',
+                                0,
+                                0,
+                                0,
+                                clock_timestamp()
+                            )
+                            """,
+                            conn,
+                            tx))
+                    {
+                        command.Parameters.AddWithValue(
+                            "processId",
+                            processId);
+
+                        command.Parameters.AddWithValue(
+                            "stepInstanceId",
+                            stepInstanceId);
+
+                        await command.ExecuteNonQueryAsync();
+                    }
+                }
+
+                // ========================================================
+                // 8. End step
+                // ========================================================
+
+                if (stepType == "end")
+                {
+                    using var stepConfig =
+                        JsonDocument.Parse(stepConfigJson);
+
+                    var outcome =
+                        GetOptionalString(
+                            stepConfig.RootElement,
+                            "outcome");
+
+                    await using (
+                        var command = new NpgsqlCommand(
+                            """
+                            UPDATE workflow.step_instances
+                            SET outcome = @outcome,
+                                completed_at = clock_timestamp()
+                            WHERE step_instance_id = @stepInstanceId
+                            """,
+                            conn,
+                            tx))
+                    {
+                        command.Parameters.AddWithValue(
+                            "outcome",
+                            (object?)outcome ??
+                            DBNull.Value);
+
+                        command.Parameters.AddWithValue(
+                            "stepInstanceId",
+                            stepInstanceId);
+
+                        await command.ExecuteNonQueryAsync();
+                    }
+                }
+
+                // ========================================================
+                // 9. Set process state
+                // ========================================================
+
+                await using (
+                    var command = new NpgsqlCommand(
+                        """
+                        UPDATE workflow.process_instances
+                        SET state = @state,
+                            updated_at = clock_timestamp()
+                        WHERE process_id = @processId
+                        """,
+                        conn,
+                        tx))
+                {
+                    command.Parameters.AddWithValue(
+                        "state",
+                        processState);
+
+                    command.Parameters.AddWithValue(
+                        "processId",
+                        processId);
+
+                    await command.ExecuteNonQueryAsync();
+                }
+
+                // ========================================================
+                // 10. ProcessStarted event
+                // ========================================================
+
+                await using (
+                    var command = new NpgsqlCommand(
+                        """
+                        INSERT INTO workflow.events(
+                            event_id,
+                            process_id,
+                            step_instance_id,
+                            event_type,
+                            payload
+                        )
+                        VALUES (
+                            gen_random_uuid(),
+                            @processId,
+                            @stepInstanceId,
+                            'ProcessStarted',
+                            @payload::jsonb
+                        )
+                        """,
+                        conn,
+                        tx))
+                {
+                    command.Parameters.AddWithValue(
+                        "processId",
+                        processId);
+
+                    command.Parameters.AddWithValue(
+                        "stepInstanceId",
+                        stepInstanceId);
+
+                    command.Parameters.AddWithValue(
+                        "payload",
+                        JsonSerializer.Serialize(
+                            new
+                            {
+                                flowName,
+                                flowVersion,
+                                startStep = startStepKey
+                            }));
+
+                    await command.ExecuteNonQueryAsync();
+                }
+
+                await tx.CommitAsync();
 
                 Console.WriteLine(
                     Envelope.Ok(
@@ -152,410 +603,30 @@ internal static class FlowRuntimeCommands
                             resource = "process",
                             operation = "started",
                             processId =
-                                existingProcessId.ToString(),
+                                processId.ToString(),
                             flowName,
-                            flowVersion = existingVersion,
-                            state = existingState
+                            flowVersion,
+                            state = processState
                         }));
 
                 return 0;
             }
-
-            var processId =
-                Guid.NewGuid();
-
-            var startStepKey =
-                GetRequiredString(
-                    mapDocument.RootElement,
-                    "start_step");
-
-            await using var insertProcessCommand =
-                new NpgsqlCommand(
-                    """
-                    INSERT INTO workflow.process_instances(
-                        process_id,
-                        flow_id,
-                        flow_version_id,
-                        flow_name,
-                        flow_version,
-                        business_key,
-                        state,
-                        current_step_key,
-                        data
-                    )
-                    VALUES (
-                        @processId,
-                        @flowId,
-                        @flowVersionId,
-                        @flowName,
-                        @flowVersion,
-                        @businessKey,
-                        @state,
-                        @currentStepKey,
-                        @data::jsonb
-                    )
-                    """,
-                    conn,
-                    tx);
-
-            insertProcessCommand.Parameters.AddWithValue(
-                "processId",
-                processId);
-
-            insertProcessCommand.Parameters.AddWithValue(
-                "flowId",
-                flowId);
-
-            insertProcessCommand.Parameters.AddWithValue(
-                "flowVersionId",
-                flowVersionId);
-
-            insertProcessCommand.Parameters.AddWithValue(
-                "flowName",
-                flowName!);
-
-            insertProcessCommand.Parameters.AddWithValue(
-                "flowVersion",
-                flowVersion);
-
-            insertProcessCommand.Parameters.AddWithValue(
-                "businessKey",
-                businessKey!);
-
-            insertProcessCommand.Parameters.AddWithValue(
-                "state",
-                "RUNNING");
-
-            insertProcessCommand.Parameters.AddWithValue(
-                "currentStepKey",
-                startStepKey);
-
-            insertProcessCommand.Parameters.AddWithValue(
-                "data",
-                data.RootElement.GetRawText());
-
-            await insertProcessCommand.ExecuteNonQueryAsync();
-
-            await using var startStepCommand =
-                new NpgsqlCommand(
-                    """
-                    SELECT
-                        sd.step_definition_id,
-                        sd.step_key,
-                        sd.step_type,
-                        sd.step_config
-                    FROM workflow.step_definitions sd
-                    WHERE sd.flow_version_id = @flowVersionId
-                      AND sd.step_key = @stepKey
-                    """,
-                    conn,
-                    tx);
-
-            startStepCommand.Parameters.AddWithValue(
-                "flowVersionId",
-                flowVersionId);
-
-            startStepCommand.Parameters.AddWithValue(
-                "stepKey",
-                startStepKey);
-
-            await using var stepReader =
-                await startStepCommand.ExecuteReaderAsync();
-
-            if (!await stepReader.ReadAsync())
+            catch (PostgresException ex)
             {
-                await stepReader.DisposeAsync();
                 await tx.RollbackAsync();
 
                 return Fail(
-                    "flow.invalid_definition",
-                    "start step definition not found");
+                    "flow.start_failed",
+                    $"sqlstate={ex.SqlState}; message={ex.MessageText}");
             }
-
-            var stepDefinitionId =
-                stepReader.GetGuid(0);
-
-            var stepKey =
-                stepReader.GetString(1);
-
-            var stepType =
-                stepReader.GetString(2);
-
-            var stepConfig =
-                stepReader.GetFieldValue<JsonDocument>(3);
-
-            await stepReader.DisposeAsync();
-
-            var stepInstanceId =
-                Guid.NewGuid();
-
-            var stepState =
-                stepType switch
-                {
-                    "automatic" => "READY",
-                    "wait_signal" => "WAITING",
-                    "manual" => "WAITING",
-                    "end" => "COMPLETED",
-                    _ => throw new InvalidOperationException(
-                        $"unsupported start step type: {stepType}")
-                };
-
-            var processState =
-                stepType switch
-                {
-                    "automatic" => "RUNNING",
-                    "wait_signal" => "WAITING_SIGNAL",
-                    "manual" => "WAITING_MANUAL",
-                    "end" => "COMPLETED",
-                    _ => throw new InvalidOperationException(
-                        $"unsupported start step type: {stepType}")
-                };
-
-            await using var insertStepCommand =
-                new NpgsqlCommand(
-                    """
-                    INSERT INTO workflow.step_instances(
-                        step_instance_id,
-                        process_id,
-                        step_key,
-                        step_type,
-                        state
-                    )
-                    VALUES (
-                        @stepInstanceId,
-                        @processId,
-                        @stepKey,
-                        @stepType,
-                        @state
-                    )
-                    """,
-                    conn,
-                    tx);
-
-            insertStepCommand.Parameters.AddWithValue(
-                "stepInstanceId",
-                stepInstanceId);
-
-            insertStepCommand.Parameters.AddWithValue(
-                "processId",
-                processId);
-
-            insertStepCommand.Parameters.AddWithValue(
-                "stepKey",
-                stepKey);
-
-            insertStepCommand.Parameters.AddWithValue(
-                "stepType",
-                stepType.ToUpperInvariant());
-
-            insertStepCommand.Parameters.AddWithValue(
-                "state",
-                stepState);
-
-            await insertStepCommand.ExecuteNonQueryAsync();
-
-            if (stepType == "automatic")
+            catch (Exception ex)
             {
-                await using var taskCommand =
-                    new NpgsqlCommand(
-                        """
-                        SELECT task_definition_id
-                        FROM workflow.task_definitions
-                        WHERE step_definition_id = @stepDefinitionId
-                        """,
-                        conn,
-                        tx);
+                await tx.RollbackAsync();
 
-                taskCommand.Parameters.AddWithValue(
-                    "stepDefinitionId",
-                    stepDefinitionId);
-
-                var taskExists =
-                    await taskCommand.ExecuteScalarAsync();
-
-                if (taskExists is null)
-                {
-                    await tx.RollbackAsync();
-
-                    return Fail(
-                        "flow.invalid_definition",
-                        "automatic start step has no task definition");
-                }
-
-                await using var insertJobCommand =
-                    new NpgsqlCommand(
-                        """
-                        INSERT INTO workflow.jobs(
-                            job_id,
-                            process_id,
-                            step_instance_id,
-                            execution_id,
-                            state,
-                            lease_version,
-                            attempt_count,
-                            failure_count,
-                            next_attempt_at
-                        )
-                        VALUES (
-                            @jobId,
-                            @processId,
-                            @stepInstanceId,
-                            @executionId,
-                            'READY',
-                            0,
-                            0,
-                            0,
-                            clock_timestamp()
-                        )
-                        """,
-                        conn,
-                        tx);
-
-                insertJobCommand.Parameters.AddWithValue(
-                    "jobId",
-                    Guid.NewGuid());
-
-                insertJobCommand.Parameters.AddWithValue(
-                    "processId",
-                    processId);
-
-                insertJobCommand.Parameters.AddWithValue(
-                    "stepInstanceId",
-                    stepInstanceId);
-
-                insertJobCommand.Parameters.AddWithValue(
-                    "executionId",
-                    Guid.NewGuid());
-
-                await insertJobCommand.ExecuteNonQueryAsync();
+                return Fail(
+                    "flow.start_failed",
+                    ex.Message);
             }
-
-            if (stepType == "end")
-            {
-                var outcome =
-                    GetOptionalString(
-                        stepConfig.RootElement,
-                        "outcome");
-
-                await using var completeEndCommand =
-                    new NpgsqlCommand(
-                        """
-                        UPDATE workflow.step_instances
-                        SET outcome = @outcome,
-                            completed_at = clock_timestamp()
-                        WHERE step_instance_id = @stepInstanceId
-                        """,
-                        conn,
-                        tx);
-
-                completeEndCommand.Parameters.AddWithValue(
-                    "outcome",
-                    (object?)outcome ??
-                    DBNull.Value);
-
-                completeEndCommand.Parameters.AddWithValue(
-                    "stepInstanceId",
-                    stepInstanceId);
-
-                await completeEndCommand.ExecuteNonQueryAsync();
-            }
-
-            await using var updateProcessStateCommand =
-                new NpgsqlCommand(
-                    """
-                    UPDATE workflow.process_instances
-                    SET state = @state,
-                        updated_at = clock_timestamp()
-                    WHERE process_id = @processId
-                    """,
-                    conn,
-                    tx);
-
-            updateProcessStateCommand.Parameters.AddWithValue(
-                "state",
-                processState);
-
-            updateProcessStateCommand.Parameters.AddWithValue(
-                "processId",
-                processId);
-
-            await updateProcessStateCommand.ExecuteNonQueryAsync();
-
-            await using var eventCommand =
-                new NpgsqlCommand(
-                    """
-                    INSERT INTO workflow.events(
-                        event_id,
-                        process_id,
-                        step_instance_id,
-                        event_type,
-                        payload
-                    )
-                    VALUES (
-                        gen_random_uuid(),
-                        @processId,
-                        @stepInstanceId,
-                        'ProcessStarted',
-                        @payload::jsonb
-                    )
-                    """,
-                    conn,
-                    tx);
-
-            eventCommand.Parameters.AddWithValue(
-                "processId",
-                processId);
-
-            eventCommand.Parameters.AddWithValue(
-                "stepInstanceId",
-                stepInstanceId);
-
-            eventCommand.Parameters.AddWithValue(
-                "payload",
-                JsonSerializer.Serialize(
-                    new
-                    {
-                        flowName,
-                        flowVersion,
-                        startStep = startStepKey
-                    }));
-
-            await eventCommand.ExecuteNonQueryAsync();
-
-            await tx.CommitAsync();
-
-            Console.WriteLine(
-                Envelope.Ok(
-                    new
-                    {
-                        resource = "process",
-                        operation = "started",
-                        processId =
-                            processId.ToString(),
-                        flowName,
-                        flowVersion,
-                        state = processState
-                    }));
-
-            return 0;
-        }
-        catch (PostgresException ex)
-        {
-            await tx.RollbackAsync();
-
-            return Fail(
-                "flow.start_failed",
-                ex.SqlState == "23505"
-                    ? "process already exists"
-                    : "failed to start workflow process");
-        }
-        catch
-        {
-            await tx.RollbackAsync();
-
-            return Fail(
-                "flow.start_failed",
-                "failed to start workflow process");
         }
         finally
         {
@@ -1640,6 +1711,19 @@ internal static class FlowRuntimeCommands
         }
 
         return value.GetString();
+    }
+
+    // Новый helper
+    private static async Task<int> RollbackAndFailAsync(
+        NpgsqlTransaction tx,
+        string code,
+        string message)
+    {
+        await tx.RollbackAsync();
+
+        return Fail(
+            code,
+            message);
     }
 
     private static int Fail(
