@@ -1,20 +1,15 @@
 ﻿CREATE SCHEMA IF NOT EXISTS workflow;
 
+GRANT USAGE, CREATE
+ON SCHEMA workflow
+TO api_owner;
+
 -- ============================================================
 -- Roles
 -- ============================================================
 
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_roles
-        WHERE rolname = 'workflow_worker'
-    ) THEN
-        CREATE ROLE workflow_worker NOLOGIN;
-    END IF;
-END
-$$;
+-- workflow_worker создаётся на этапе db-bootstrap,
+-- потому что migration role не должна иметь CREATEROLE.
 
 -- Worker должен видеть только schema metadata, но не иметь
 -- прямого DML к workflow-таблицам.
@@ -1327,3 +1322,40 @@ ON workflow.process_instances,
    workflow.signals,
    workflow.events
 TO course_cli_login;
+
+-- ============================================================
+-- CLI / API access to workflow schema
+-- ============================================================
+
+GRANT USAGE
+ON SCHEMA workflow
+TO course_cli_login,
+   course_api_login,
+   course_migration_login;
+
+GRANT SELECT, INSERT, UPDATE
+ON workflow.flow_definitions,
+   workflow.flow_versions,
+   workflow.step_definitions,
+   workflow.task_definitions,
+   workflow.transition_definitions
+TO course_cli_login;
+
+GRANT SELECT
+ON workflow.process_instances,
+   workflow.step_instances,
+   workflow.jobs,
+   workflow.task_attempts,
+   workflow.signals,
+   workflow.events
+TO course_cli_login,
+   course_api_login;
+
+GRANT SELECT
+ON workflow.flow_definitions,
+   workflow.flow_versions,
+   workflow.step_definitions,
+   workflow.task_definitions,
+   workflow.transition_definitions
+TO course_api_login,
+   course_migration_login;
