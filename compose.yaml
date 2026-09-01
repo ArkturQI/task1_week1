@@ -96,6 +96,16 @@ services:
             ) THEN
                 CREATE ROLE workflow_worker NOLOGIN;
             END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_roles
+                WHERE rolname = 'workflow_worker_login'
+            ) THEN
+                CREATE ROLE workflow_worker_login
+                    LOGIN
+                    PASSWORD 'worker_secret_change_me';
+            END IF;
         END
         $$$$;
 
@@ -111,6 +121,10 @@ services:
         ON DATABASE course
         TO course_cli_login;
 
+        GRANT CONNECT
+        ON DATABASE course
+        TO workflow_worker_login;
+
         GRANT api_owner
         TO course_migration_login
         WITH ADMIN OPTION;
@@ -124,6 +138,9 @@ services:
 
         GRANT course_api
         TO course_cli_login;
+
+        GRANT workflow_worker
+        TO workflow_worker_login;
 
         SQL
 
