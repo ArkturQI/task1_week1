@@ -1302,3 +1302,28 @@ ALTER TABLE workflow.events
 REVOKE CREATE
 ON SCHEMA workflow
 FROM PUBLIC;
+
+-- ============================================================
+-- CLI workflow publication privileges
+-- ============================================================
+
+GRANT SELECT, INSERT
+ON workflow.flow_definitions,
+   workflow.flow_versions,
+   workflow.step_definitions,
+   workflow.task_definitions,
+   workflow.transition_definitions
+TO course_cli_login;
+
+GRANT UPDATE
+ON workflow.flow_versions
+TO course_cli_login;
+
+GRANT SELECT
+ON workflow.process_instances,
+   workflow.step_instances,
+   workflow.jobs,
+   workflow.task_attempts,
+   workflow.signals,
+   workflow.events
+TO course_cli_login;
