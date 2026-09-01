@@ -541,12 +541,18 @@ internal static class FlowCommands
         return 0;
     }
 
+    // НОВЫЙ ActivateAsync (полностью заменён)
     public static async Task<int> ActivateAsync(
         string[] args)
     {
-        if (args.Length != 4 ||
-            args[1] != "--version" ||
-            !int.TryParse(args[2], out var version) ||
+        if (args.Length != 3 ||
+            !string.Equals(
+                args[1],
+                "--version",
+                StringComparison.OrdinalIgnoreCase) ||
+            !int.TryParse(
+                args[2],
+                out var version) ||
             version < 1)
         {
             Console.WriteLine(
@@ -569,7 +575,7 @@ internal static class FlowCommands
 
         try
         {
-            await using var guard =
+            await using var findCommand =
                 new NpgsqlCommand(
                     """
                     SELECT flow_version_id
@@ -577,22 +583,23 @@ internal static class FlowCommands
                     WHERE flow_name = @flow
                       AND flow_version = @version
                       AND status = 'PUBLISHED'
+                    FOR UPDATE
                     """,
                     conn,
                     tx);
 
-            guard.Parameters.AddWithValue(
+            findCommand.Parameters.AddWithValue(
                 "flow",
                 flowName);
 
-            guard.Parameters.AddWithValue(
+            findCommand.Parameters.AddWithValue(
                 "version",
                 version);
 
-            var exists =
-                await guard.ExecuteScalarAsync();
+            var flowVersionId =
+                await findCommand.ExecuteScalarAsync();
 
-            if (exists is not Guid)
+            if (flowVersionId is not Guid)
             {
                 await tx.RollbackAsync();
 
@@ -604,24 +611,36 @@ internal static class FlowCommands
                 return 1;
             }
 
-            await using var deactivate =
+            /*
+             * В пределах одной transaction сначала снимаем active
+             * со старой версии, затем активируем новую.
+             *
+             * Благодаря partial unique index в БД одновременно
+             * активной может быть только одна версия конкретного flow.
+             */
+            await using var deactivateCommand =
                 new NpgsqlCommand(
                     """
                     UPDATE workflow.flow_versions
                     SET is_active = false
                     WHERE flow_name = @flow
                       AND is_active = true
+                      AND flow_version <> @version
                     """,
                     conn,
                     tx);
 
-            deactivate.Parameters.AddWithValue(
+            deactivateCommand.Parameters.AddWithValue(
                 "flow",
                 flowName);
 
-            await deactivate.ExecuteNonQueryAsync();
+            deactivateCommand.Parameters.AddWithValue(
+                "version",
+                version);
 
-            await using var activate =
+            await deactivateCommand.ExecuteNonQueryAsync();
+
+            await using var activateCommand =
                 new NpgsqlCommand(
                     """
                     UPDATE workflow.flow_versions
@@ -633,15 +652,28 @@ internal static class FlowCommands
                     conn,
                     tx);
 
-            activate.Parameters.AddWithValue(
+            activateCommand.Parameters.AddWithValue(
                 "flow",
                 flowName);
 
-            activate.Parameters.AddWithValue(
+            activateCommand.Parameters.AddWithValue(
                 "version",
                 version);
 
-            await activate.ExecuteNonQueryAsync();
+            var affected =
+                await activateCommand.ExecuteNonQueryAsync();
+
+            if (affected != 1)
+            {
+                await tx.RollbackAsync();
+
+                Console.WriteLine(
+                    Envelope.Error(
+                        "flow.activate_failed",
+                        "workflow version could not be activated"));
+
+                return 1;
+            }
 
             await tx.CommitAsync();
 
@@ -897,7 +929,7 @@ internal static class FlowCommands
         return errors;
     }
 
-    // НОВАЯ ВЕРСИЯ ValidateTaskLocalRules (полностью заменена)
+    // НОВАЯ ВЕРСИЯ ValidateTaskLocalRules
     private static List<string> ValidateTaskLocalRules(
         WorkflowMap map)
     {

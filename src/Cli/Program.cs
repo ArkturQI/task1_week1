@@ -106,6 +106,18 @@ try
                         return await FlowCommands.ActivateAsync(
                             args.Skip(2).ToArray());
 
+                    case "start":
+                        return await FlowRuntimeCommands.StartAsync(
+                            args.Skip(2).ToArray());
+
+                    case "get":
+                        return await FlowRuntimeCommands.GetAsync(
+                            args.Skip(2).ToArray());
+
+                    case "signal":
+                        return await FlowRuntimeCommands.SignalAsync(
+                            args.Skip(2).ToArray());
+
                     default:
                         return Fail(
                             "cli.unknown_subcommand",
