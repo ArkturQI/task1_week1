@@ -8,7 +8,11 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d course"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U postgres -d course"
+        ]
       interval: 2s
       timeout: 3s
       retries: 15
@@ -56,7 +60,9 @@ services:
                 FROM pg_roles
                 WHERE rolname = 'api_owner'
             ) THEN
-                CREATE ROLE api_owner NOLOGIN NOSUPERUSER;
+                CREATE ROLE api_owner
+                    NOLOGIN
+                    NOSUPERUSER;
             END IF;
 
             IF NOT EXISTS (
@@ -149,12 +155,27 @@ services:
       context: .
       dockerfile: src/Api/Dockerfile
     environment:
-      ConnectionStrings__Course: "Host=postgres;Port=5432;Database=course;Username=course_api_login;Password=api_secret_change_me"
-      MIGRATION_CONNECTION_STRING: "Host=postgres;Port=5432;Database=course;Username=course_migration_login;Password=migration_secret_change_me"
-      COURSE_JWT_SIGNING_KEY: "${COURSE_JWT_SIGNING_KEY:-moduledev-week1-rotated-key-do-not-use-in-production-2026-aug}"
+      ConnectionStrings__Course: >-
+        Host=postgres;
+        Port=5432;
+        Database=course;
+        Username=course_api_login;
+        Password=api_secret_change_me
+
+      MIGRATION_CONNECTION_STRING: >-
+        Host=postgres;
+        Port=5432;
+        Database=course;
+        Username=course_migration_login;
+        Password=migration_secret_change_me
+
+      COURSE_JWT_SIGNING_KEY: >-
+        ${COURSE_JWT_SIGNING_KEY:-moduledev-week1-rotated-key-do-not-use-in-production-2026-aug}
+
     depends_on:
       postgres:
         condition: service_healthy
+
       db-bootstrap:
         condition: service_completed_successfully
 
@@ -162,10 +183,13 @@ services:
     build:
       context: .
       dockerfile: src/Gateway/Dockerfile
+
     ports:
       - "8080:8080"
+
     environment:
       Api__BaseUrl: "http://api:8080"
+
     depends_on:
       api:
         condition: service_started
@@ -174,13 +198,83 @@ services:
     build:
       context: .
       dockerfile: src/Cli/Dockerfile
+
     environment:
-      ConnectionStrings__Course: "Host=postgres;Port=5432;Database=course;Username=course_cli_login;Password=cli_secret_change_me"
+      ConnectionStrings__Course: >-
+        Host=postgres;
+        Port=5432;
+        Database=course;
+        Username=course_cli_login;
+        Password=cli_secret_change_me
+
     depends_on:
       postgres:
         condition: service_healthy
+
       db-bootstrap:
         condition: service_completed_successfully
+
+  worker-a:
+    build:
+      context: .
+      dockerfile: Workflow.Worker/Dockerfile
+
+    environment:
+      ConnectionStrings__Course: >-
+        Host=postgres;
+        Port=5432;
+        Database=course;
+        Username=workflow_worker_login;
+        Password=worker_secret_change_me
+
+      WORKER_OWNER: "worker-a"
+      WORKER_POLL_INTERVAL_MS: "250"
+      WORKER_CLAIM_LIMIT: "1"
+      WORKER_LEASE_SECONDS: "5"
+
+      COURSE_TEST_PROFILE: "${COURSE_TEST_PROFILE:-false}"
+      COURSE_FAILPOINT: "${COURSE_FAILPOINT:-}"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+      db-bootstrap:
+        condition: service_completed_successfully
+
+      api:
+        condition: service_started
+
+  worker-b:
+    build:
+      context: .
+      dockerfile: Workflow.Worker/Dockerfile
+
+    environment:
+      ConnectionStrings__Course: >-
+        Host=postgres;
+        Port=5432;
+        Database=course;
+        Username=workflow_worker_login;
+        Password=worker_secret_change_me
+
+      WORKER_OWNER: "worker-b"
+      WORKER_POLL_INTERVAL_MS: "250"
+      WORKER_CLAIM_LIMIT: "1"
+      WORKER_LEASE_SECONDS: "5"
+
+      COURSE_TEST_PROFILE: "${COURSE_TEST_PROFILE:-false}"
+      COURSE_FAILPOINT: "${COURSE_FAILPOINT:-}"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+      db-bootstrap:
+        condition: service_completed_successfully
+
+      api:
+        condition: service_started
 
 volumes:
   pgdata:

@@ -1,30 +1,30 @@
-# См. статью по ссылке https://aka.ms/customizecontainer, чтобы узнать как настроить контейнер отладки и как Visual Studio использует этот Dockerfile для создания образов для ускорения отладки.
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 
-# В зависимости от операционной системы хост-компьютеров, которые будут выполнять сборку контейнеров или запускать их, может потребоваться изменить образ, указанный в инструкции FROM.
-# Дополнительные сведения см. на странице https://aka.ms/containercompat
-
-# Этот этап используется при запуске из VS в быстром режиме (по умолчанию для конфигурации отладки)
-FROM mcr.microsoft.com/dotnet/runtime:10.0-nanoserver-ltsc2022 AS base
-WORKDIR /app
-
-
-# Этот этап используется для сборки проекта службы
-FROM mcr.microsoft.com/dotnet/sdk:10.0-nanoserver-ltsc2022 AS build
-ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
+
 COPY ["Workflow.Worker/Workflow.Worker.csproj", "Workflow.Worker/"]
-RUN dotnet restore "./Workflow.Worker/Workflow.Worker.csproj"
+
+RUN dotnet restore "Workflow.Worker/Workflow.Worker.csproj"
+
 COPY . .
-WORKDIR "/src/Workflow.Worker"
-RUN dotnet build "./Workflow.Worker.csproj" -c %BUILD_CONFIGURATION% -o /app/build
 
-# Этот этап используется для публикации проекта службы, который будет скопирован на последний этап
-FROM build AS publish
-ARG BUILD_CONFIGURATION=Release
-RUN dotnet publish "./Workflow.Worker.csproj" -c %BUILD_CONFIGURATION% -o /app/publish /p:UseAppHost=false
+WORKDIR /src/Workflow.Worker
 
-# Этот этап используется в рабочей среде или при запуске из VS в обычном режиме (по умолчанию, когда конфигурация отладки не используется)
-FROM base AS final
+RUN dotnet publish \
+    "Workflow.Worker.csproj" \
+    -c Release \
+    -o /app/publish \
+    /p:UseAppHost=false
+
+
+FROM mcr.microsoft.com/dotnet/runtime:10.0
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgssapi-krb5-2 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
-COPY --from=publish /app/publish .
+
+COPY --from=build /app/publish .
+
 ENTRYPOINT ["dotnet", "Workflow.Worker.dll"]

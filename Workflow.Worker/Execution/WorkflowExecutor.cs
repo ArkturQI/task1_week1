@@ -30,23 +30,52 @@ public sealed class WorkflowExecutor
                 job.InputMapping,
                 job.InputConstants);
 
-        var context =
+        var correlationId =
+            Guid.NewGuid();
+
+        var requestId =
+            job.ExecutionId.ToString();
+
+        var idempotencyKey =
+            job.ExecutionId.ToString();
+
+        /*
+         * ВАЖНО:
+         * executionId / correlationId / requestId / idempotencyKey
+         * должны находиться в корне context.
+         *
+         * Fixture target function читает:
+         *
+         *   p_context ->> 'executionId'
+         *
+         * а не workflow.executionId.
+         */
+        using var context =
             JsonSerializer.SerializeToDocument(
                 new
                 {
-                    principal = "workflow-worker",
-                    consumer = "workflow-worker",
+                    executionId =
+                        job.ExecutionId.ToString(),
+
+                    correlationId =
+                        correlationId.ToString(),
+
+                    requestId,
+
+                    idempotencyKey,
+
+                    principal =
+                        "workflow-worker",
+
+                    consumer =
+                        "workflow-worker",
+
                     scopes = new[]
                     {
                         "workflow:execute",
                         "workflow:read"
                     },
-                    correlationId =
-                        Guid.NewGuid().ToString(),
-                    requestId =
-                        job.ExecutionId.ToString(),
-                    idempotencyKey =
-                        $"{job.ExecutionId}:{job.AttemptNumber}",
+
                     workflow = new
                     {
                         processId =
@@ -165,9 +194,16 @@ public sealed class WorkflowExecutor
                     ? codeElement.GetString()
                     : null;
 
+            var message =
+                root.TryGetProperty(
+                    "message",
+                    out var messageElement)
+                    ? messageElement.GetString()
+                    : null;
+
             throw new ActionInvocationException(
                 code ?? "action.error",
-                GetMessage(root));
+                message ?? "action invocation returned an error");
         }
 
         if (!root.TryGetProperty(
@@ -257,22 +293,6 @@ public sealed class WorkflowExecutor
             job.JobId,
             outcome,
             finishRaw);
-    }
-
-    private static string GetMessage(
-        JsonElement root)
-    {
-        if (root.TryGetProperty(
-                "message",
-                out var messageElement) &&
-            messageElement.ValueKind ==
-                JsonValueKind.String)
-        {
-            return messageElement.GetString()
-                   ?? "action failed";
-        }
-
-        return "action failed";
     }
 }
 

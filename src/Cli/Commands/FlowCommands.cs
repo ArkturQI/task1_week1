@@ -304,9 +304,12 @@ internal static class FlowCommands
                 {
                     var task = step.Task!;
 
+                    // ============================================================
+                    // ИСПРАВЛЕНИЕ: сериализуем только массив задержек, а не весь объект Retry
+                    // ============================================================
                     var retryJson =
                         JsonSerializer.Serialize(
-                            task.Retry,
+                            task.Retry.DelaysMs,
                             CanonicalJsonOptions);
 
                     var mappingJson =
