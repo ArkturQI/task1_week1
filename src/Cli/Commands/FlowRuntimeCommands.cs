@@ -78,6 +78,8 @@ internal static class FlowRuntimeCommands
 
                     if (!await reader.ReadAsync())
                     {
+                        await reader.DisposeAsync();
+
                         return await RollbackAndFailAsync(
                             tx,
                             "flow.not_active",
@@ -95,6 +97,8 @@ internal static class FlowRuntimeCommands
 
                     mapJson =
                         reader.GetString(3);
+
+                    await reader.DisposeAsync();
                 }
 
                 // ========================================================
@@ -183,6 +187,8 @@ internal static class FlowRuntimeCommands
 
                         return 0;
                     }
+
+                    await reader.DisposeAsync();
                 }
 
                 // ========================================================
@@ -325,6 +331,8 @@ internal static class FlowRuntimeCommands
 
                     stepConfigJson =
                         reader.GetString(3);
+
+                    await reader.DisposeAsync();
                 }
 
                 // ========================================================

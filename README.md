@@ -1,4 +1,4 @@
-# Database-first action runtime
+# moduledev-runtime
 
 Database-first runtime для динамически публикуемых actions. Клиент выбирает только маршрут action и передаёт payload; `schema`, `target function`, SQL и policy определяются сервером из опубликованного catalog.
 
@@ -252,6 +252,11 @@ src/Api/DATA/DbMigrator.cs
 001_schema.sql
 002_api_functions.sql
 003_payment_v2.sql
+004_workflow.sql
+005_workflow_fixes.sql
+006_workflow_claim_fix.sql
+007_workflow_interval_fix.sql
+008_api_invoke_idempotency_retry.sql
 ```
 
 ### CLI fixture migrations
@@ -269,13 +274,13 @@ docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli 
 Пример для fixture OpenCheck v1:
 
 ```powershell
-docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/opencheck-probe-v1.action.json
+docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/3c363d117b40.action.json
 ```
 
 v2:
 
 ```powershell
-docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/opencheck-probe-v2.action.json
+docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/3c363d117b40.action.json
 ```
 
 Список опубликованных actions:
@@ -299,8 +304,8 @@ docker compose up -d --build
 
 docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli migration apply /autocheck/input/migrations
 
-docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/opencheck-probe-v1.action.json
-docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/opencheck-probe-v2.action.json
+docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/3c363d117b40.action.json
+docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/3c363d117b40.action.json
 ```
 
 Запуск всех тестов:
@@ -412,9 +417,9 @@ curl.exe -s http://localhost:8080/openapi/default.json
 ```powershell
 docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli migration apply /autocheck/input/migrations
 
-docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/opencheck-probe-v1.action.json
+docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/3c363d117b40.action.json
 
-docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/opencheck-probe-v2.action.json
+docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/3c363d117b40.action.json
 ```
 
 После этого:
@@ -527,8 +532,8 @@ docker compose logs db-bootstrap --no-log-prefix
 docker compose logs api --tail 30
 
 docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli migration apply /autocheck/input/migrations
-docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/opencheck-probe-v1.action.json
-docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/opencheck-probe-v2.action.json
+docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/3c363d117b40.action.json
+docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/3c363d117b40.action.json
 dotnet test tests/Week1.Tests/Week1.Tests.csproj
 ```
 
@@ -537,3 +542,221 @@ dotnet test tests/Week1.Tests/Week1.Tests.csproj
 ```bash
 ./check.sh
 ```
+
+## Решение
+
+### Архитектура
+
+Решение построено как database-first workflow runtime поверх существующего action runtime.
+
+```text
+Client
+  │
+  │ HTTP :8080
+  ▼
+Gateway
+  │  JWT / route whitelist / proxy
+  ▼
+API
+  │  server-side context / api.invoke / PostgreSQL
+  ▼
+PostgreSQL
+  ├─ autocheck.action_definitions
+  ├─ autocheck.idempotency_claims
+  ├─ workflow.process_instances
+  ├─ workflow.jobs
+  ├─ workflow.task_attempts
+  └─ workflow.events
+
+Workflow.Worker
+  ├─ worker-a
+  └─ worker-b
+```
+
+`gateway` — единственная публичная HTTP-точка. `api`, `cli`, `postgres`, `worker-a` и `worker-b` работают внутри Compose-сети. Worker забирает задания через `workflow.claim_jobs`, выполняет action через `api.invoke`, после чего вызывает `workflow.finish_job` или `workflow.fail_job`.
+
+Идемпотентность обеспечивается серверным execution context и таблицей `autocheck.idempotency_claims`. Для retry решение из поля `retryable` в error envelope action имеет приоритет над статической классификацией внутренних ошибок Worker.
+
+Документация архитектуры описана через C4 и ADR:
+
+- `docs/c4-container.md` — C4 описание контейнерной архитектуры;
+- `docs/adr-001-trust-boundary.md` — границы доверия;
+- `docs/adr-002-outcome-vs-result.md` — разделение outcome и result.
+
+### Запуск
+
+Из корня репозитория:
+
+```powershell
+docker compose up -d --build
+```
+
+Проверить состояние сервисов:
+
+```powershell
+docker compose ps
+```
+
+Публичный endpoint:
+
+```text
+http://localhost:8080
+```
+
+Ожидаются сервисы `api`, `cli`, `gateway`, `postgres`, `worker-a` и `worker-b`. Контейнер `db-bootstrap` после успешного выполнения завершается с кодом `0`.
+
+Для полного сброса локальной базы и повторного применения всех миграций:
+
+```powershell
+docker compose down -v --remove-orphans
+docker compose up -d --build
+```
+
+### Конфигурация
+
+Основные переменные конфигурации:
+
+```text
+COURSE_JWT_ISSUER=moduledev-course
+COURSE_JWT_AUDIENCE=moduledev-api
+COURSE_JWT_SIGNING_KEY=<HS256 key, минимум 32 bytes>
+```
+
+Gateway использует:
+
+```text
+Api__BaseUrl=http://api:8080
+```
+
+Worker использует отдельную PostgreSQL login role `workflow_worker_login`; для двух worker-инстансов различаются `WORKER_OWNER=worker-a` и `WORKER_OWNER=worker-b`.
+
+Основные worker-параметры:
+
+```text
+WORKER_POLL_INTERVAL_MS=250
+WORKER_CLAIM_LIMIT=1
+WORKER_LEASE_SECONDS=5
+```
+
+### Миграции
+
+Миграции применяются последовательно при старте API. Текущий порядок:
+
+```text
+001_schema.sql
+002_api_functions.sql
+003_payment_v2.sql
+004_workflow.sql
+005_workflow_fixes.sql
+006_workflow_claim_fix.sql
+007_workflow_interval_fix.sql
+008_api_invoke_idempotency_retry.sql
+```
+
+Fixture migrations применяются через CLI:
+
+```powershell
+docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli migration apply /autocheck/input/migrations
+```
+
+После применения fixture публикуется action через:
+
+```powershell
+docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/3c363d117b40.action.json
+```
+
+Workflow map публикуется и активируется через CLI:
+
+```powershell
+docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli flow publish /autocheck/input/maps/3c363d117b40-v1.flow.json
+docker compose run --rm cli flow activate flow-4a31f70549 --version 1
+```
+
+### Проверка
+
+Smoke-проверка gateway:
+
+```powershell
+curl.exe -s http://localhost:8080/health/live
+curl.exe -s http://localhost:8080/health/ready
+curl.exe -s http://localhost:8080/openapi/default.json
+```
+
+Собственные тесты запускаются через .NET:
+
+```powershell
+dotnet test tests/Week1.Tests/Week1.Tests.csproj
+```
+
+Основная black-box проверка задания:
+
+```powershell
+python autocheck/public_check.py --repo . --fixtures autocheck/fixtures --api-url http://localhost:8080 --output autocheck-result.json
+```
+
+Альтернативная точка входа для Bash-среды:
+
+```bash
+./check.sh
+```
+
+Для workflow проверяются как минимум следующие классы поведения:
+
+- успешное выполнение task;
+- retryable error и исчерпание `max_attempts`;
+- non-retryable error без повторной попытки;
+- идемпотентность и повторное выполнение с тем же ключом;
+- конфликт payload при том же ключе;
+- конкурентные запросы с одним idempotency key;
+- корректный claim/lease между `worker-a` и `worker-b`.
+
+### Диагностика
+
+Логи сервисов:
+
+```powershell
+docker compose logs api --tail 100
+docker compose logs gateway --tail 100
+docker compose logs worker-a --tail 100
+docker compose logs worker-b --tail 100
+```
+
+Состояние workflow:
+
+```powershell
+docker compose exec -T postgres psql -U course_api_login -d course -c "SELECT job_id, process_id, execution_id, state, lease_owner, lease_version, attempt_count FROM workflow.jobs ORDER BY created_at DESC LIMIT 10;"
+```
+
+Попытки:
+
+```powershell
+docker compose exec -T postgres psql -U course_api_login -d course -c "SELECT job_id, attempt_number, status, error_code FROM workflow.task_attempts ORDER BY started_at DESC LIMIT 10;"
+```
+
+События:
+
+```powershell
+docker compose exec -T postgres psql -U course_api_login -d course -c "SELECT process_id, event_type, payload, occurred_at FROM workflow.events ORDER BY occurred_at DESC LIMIT 20;"
+```
+
+Если появляется `A command is already in progress`, сначала убедиться, что текущий CLI использует актуальный `FlowRuntimeCommands.cs`, затем выполнить `dotnet build` и пересобрать CLI image.
+
+Если `flow start` сообщает `flow.not_active`, нужно сначала выполнить публикацию и активацию workflow map.
+
+Если тесты получают `action.not_found`, нужно применить fixture migration и опубликовать fixture action перед запуском соответствующего теста.
+
+При конфликте порта `8080` необходимо остановить локальный Compose stack перед запуском отдельного black-box checker stack:
+
+```powershell
+docker compose down
+```
+
+### Ограничения
+
+- JSON Schema validator реализует поддерживаемый subset Draft 2020-12, а не полный стандарт.
+- Runtime не позволяет клиенту выбирать произвольную PostgreSQL schema/function/SQL target; target берётся из опубликованного catalog.
+- Worker использует polling и PostgreSQL lease/claim, а не отдельный брокер сообщений.
+- Retry ограничен параметрами workflow task, включая `max_attempts` и `delays_ms`.
+- `api_owner` используется как `NOLOGIN NOSUPERUSER` owner для `SECURITY DEFINER` функций.
+- Black-box `public_check.py` является главным проверочным сценарием сдачи; отдельные xUnit-тесты дополняют его, но не заменяют.
+
