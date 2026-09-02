@@ -143,6 +143,49 @@ internal static class ActionCommands
 
             await ins.ExecuteNonQueryAsync();
 
+            // The published target is executed by api.invoke as api_owner.
+            // Grant only the minimum privileges required for the exact target.
+            await using var targetExists = new NpgsqlCommand(
+                """
+                SELECT to_regprocedure(
+                    format('%I.%I(jsonb,jsonb)', @schema, @function)
+                ) IS NOT NULL
+                """,
+                conn,
+                tx);
+
+            targetExists.Parameters.AddWithValue("schema", m.TargetSchema);
+            targetExists.Parameters.AddWithValue("function", m.TargetFunction);
+
+            var targetExistsValue =
+                await targetExists.ExecuteScalarAsync();
+
+            if (targetExistsValue is not bool exists || !exists)
+            {
+                await tx.RollbackAsync();
+
+                Console.WriteLine(
+                    Envelope.Error(
+                        "action.target_not_found",
+                        $"target function {m.TargetSchema}.{m.TargetFunction}(jsonb,jsonb) not found"));
+
+                return 1;
+            }
+
+            await using var grantSchema = new NpgsqlCommand(
+                $"GRANT USAGE ON SCHEMA {m.TargetSchema} TO api_owner",
+                conn,
+                tx);
+
+            await grantSchema.ExecuteNonQueryAsync();
+
+            await using var grantFunction = new NpgsqlCommand(
+                $"GRANT EXECUTE ON FUNCTION {m.TargetSchema}.{m.TargetFunction}(jsonb, jsonb) TO api_owner",
+                conn,
+                tx);
+
+            await grantFunction.ExecuteNonQueryAsync();
+
             await tx.CommitAsync();
 
             Console.WriteLine(Envelope.Ok(PublishResult(m)));
