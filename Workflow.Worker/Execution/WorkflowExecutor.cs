@@ -201,9 +201,28 @@ public sealed class WorkflowExecutor
                     ? messageElement.GetString()
                     : null;
 
+            /*
+             * Action сам знает, повторяема ли его ошибка (например,
+             * fixture.retry_a7dfc8eb -> retryable: true,
+             * fixture.error_09b64e2f -> retryable: false).
+             * Это явное решение из тела ответа имеет приоритет над
+             * статической классификацией по коду в Worker.IsRetryable,
+             * которая касается только внутренних инфраструктурных ошибок
+             * воркера, а не бизнес-ошибок конкретного action.
+             */
+            bool? retryable =
+                root.TryGetProperty(
+                    "retryable",
+                    out var retryableElement) &&
+                (retryableElement.ValueKind == JsonValueKind.True ||
+                 retryableElement.ValueKind == JsonValueKind.False)
+                    ? retryableElement.GetBoolean()
+                    : null;
+
             throw new ActionInvocationException(
                 code ?? "action.error",
-                message ?? "action invocation returned an error");
+                message ?? "action invocation returned an error",
+                retryable);
         }
 
         if (!root.TryGetProperty(
@@ -318,11 +337,20 @@ public sealed class ActionInvocationException :
 {
     public ActionInvocationException(
         string code,
-        string message)
+        string message,
+        bool? retryable = null)
         : base(message)
     {
         Code = code;
+        Retryable = retryable;
     }
 
     public string Code { get; }
+
+    /// <summary>
+    /// Explicit retryable decision from the action's own error envelope,
+    /// when it provided one. Null means the action didn't say - fall back
+    /// to Worker.IsRetryable's static classification by code.
+    /// </summary>
+    public bool? Retryable { get; }
 }

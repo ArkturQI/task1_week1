@@ -124,6 +124,7 @@ public sealed class Worker : BackgroundService
                 ex.Code);
 
             var retryable =
+                ex.Retryable ??
                 IsRetryable(
                     ex.Code);
 

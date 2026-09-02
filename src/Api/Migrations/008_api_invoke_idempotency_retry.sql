@@ -1,8 +1,4 @@
-﻿-- ============================================================
--- Week 2 API invoke fixes
--- ============================================================
-
--- Worker may call api.invoke through the API schema.
+﻿-- Worker may call api.invoke through the API schema.
 GRANT USAGE
 ON SCHEMA api
 TO workflow_worker;
