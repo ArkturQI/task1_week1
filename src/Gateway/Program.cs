@@ -2,7 +2,11 @@ var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
 
 var apiBase = builder.Configuration["Api__BaseUrl"] ?? "http://api:8080";
-var client = new HttpClient { BaseAddress = new Uri(apiBase) };
+var client = new HttpClient
+{
+    BaseAddress = new Uri(apiBase),
+    Timeout = TimeSpan.FromSeconds(35)
+};
 
 app.MapGet("/health/live", () => Results.Ok(new { status = "ok", service = "gateway" }));
 
