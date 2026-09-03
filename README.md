@@ -357,6 +357,16 @@ dotnet test tests/Week1.Tests/Week1.Tests.csproj
 
 ## Полная публичная проверка
 
+**Важно:** перед запуском публичного checker не оставляйте запущенным обычный локальный Compose-стек. Checker создаёт отдельный Compose-проект и сам поднимает сервисы на порту `8080`. Если ваш локальный `gateway` уже занимает `localhost:8080`, проверка завершится ошибкой `compose-up` с сообщением `Bind for 0.0.0.0:8080 failed: port is already allocated`.
+
+Для чистого прогона сначала остановите текущий стек:
+
+```powershell
+docker compose down -v --remove-orphans
+```
+
+После этого **не запускайте `docker compose up -d --build` вручную** перед checker. Публичный checker сам выполнит чистый запуск.
+
 Основная black-box проверка запускается из корня репозитория:
 
 ```powershell
@@ -522,6 +532,10 @@ docker compose up -d --build
 
 ## Быстрый путь от чистого clone до проверки
 
+### Ручной smoke test
+
+Для ручной проверки приложения можно поднять стек самостоятельно:
+
 ```powershell
 docker compose up -d --build
 
@@ -536,6 +550,16 @@ docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli 
 docker compose run --rm -T -v ${PWD}/autocheck/fixtures:/autocheck/input:ro cli action publish /autocheck/input/manifests/3c363d117b40.action.json
 dotnet test tests/Week1.Tests/Week1.Tests.csproj
 ```
+
+### Полный black-box прогон
+
+Перед checker необходимо освободить порт `8080` и не держать обычный Compose-стек запущенным:
+
+```powershell
+docker compose down -v --remove-orphans
+```
+
+После этого **не выполняйте `docker compose up -d --build` вручную**. Checker создаёт собственный Compose-проект, сам выполняет build/up и запускает проверки.
 
 Для официального black-box прогона:
 
