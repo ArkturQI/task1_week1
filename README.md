@@ -12,7 +12,7 @@ Client
   │ POST /api/{module}/{action}
   ▼
 Gateway :8080
-  │  JWT / route whitelist / proxy
+  │  route whitelist / proxy
   ▼
 Api :8080 (internal)
   │  JWT claims + server-side context
@@ -47,9 +47,8 @@ Gateway — единственная публичная точка входа.
 Он:
 
 - принимает HTTP-запросы на `:8080`;
-- валидирует JWT с HS256;
 - проверяет whitelist маршрутов;
-- проксирует разрешённые запросы во внутренний `Api` через Compose DNS;
+- проксирует `Authorization` во внутренний `Api`, не выполняя собственную криптографическую валидацию JWT (authoritative-проверка — на уровне Api, см. ADR-001);
 - не содержит catalog, предметную логику и доступ к PostgreSQL.
 
 ### Api
@@ -257,6 +256,7 @@ src/Api/DATA/DbMigrator.cs
 006_workflow_claim_fix.sql
 007_workflow_interval_fix.sql
 008_api_invoke_idempotency_retry.sql
+009_revoke_publication_operations_dml.sql
 ```
 
 ### CLI fixture migrations
@@ -579,10 +579,10 @@ Client
   │ HTTP :8080
   ▼
 Gateway
-  │  JWT / route whitelist / proxy
+  │  route whitelist / proxy
   ▼
 API
-  │  server-side context / api.invoke / PostgreSQL
+  │  JWT validation / server-side context / api.invoke / PostgreSQL
   ▼
 PostgreSQL
   ├─ autocheck.action_definitions
@@ -675,6 +675,7 @@ WORKER_LEASE_SECONDS=5
 006_workflow_claim_fix.sql
 007_workflow_interval_fix.sql
 008_api_invoke_idempotency_retry.sql
+009_revoke_publication_operations_dml.sql
 ```
 
 Fixture migrations применяются через CLI:
