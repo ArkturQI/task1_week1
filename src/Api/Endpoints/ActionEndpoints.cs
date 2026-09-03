@@ -30,6 +30,7 @@ public static class ActionEndpoints
 
             // Строгая валидация заголовка X-Action-Version
             int? version = null;
+            int? effectiveVersion = null;
             if (http.Request.Headers.TryGetValue("X-Action-Version", out var vh))
             {
                 var headerVal = vh.ToString();
@@ -44,6 +45,70 @@ public static class ActionEndpoints
 
             var idempotencyKey = http.Request.Headers["Idempotency-Key"].FirstOrDefault();
             var correlationId = Guid.NewGuid().ToString();
+
+            // HTTP trust boundary: resolve the catalog manifest and enforce required_policy
+            // before opening the action transaction. api.invoke repeats the same check in PostgreSQL.
+            try
+            {
+                await using var policyConn = new NpgsqlConnection(connStr);
+                await policyConn.OpenAsync(ct);
+                await using var policyCmd = new NpgsqlCommand(
+                    """
+                    SELECT version, manifest::text
+                    FROM autocheck.action_definitions
+                    WHERE module = @m
+                      AND action = @a
+                      AND enabled = true
+                      AND (
+                            (@v IS NOT NULL AND version = @v)
+                            OR (@v IS NULL AND is_default = true)
+                          )
+                    LIMIT 1
+                    """,
+                    policyConn);
+                policyCmd.Parameters.AddWithValue("m", module);
+                policyCmd.Parameters.AddWithValue("a", action);
+                var versionParameter = policyCmd.Parameters.Add("v", NpgsqlTypes.NpgsqlDbType.Integer);
+                versionParameter.Value = version.HasValue ? version.Value : DBNull.Value;
+
+                await using var policyReader = await policyCmd.ExecuteReaderAsync(ct);
+                if (await policyReader.ReadAsync(ct))
+                {
+                    effectiveVersion = policyReader.GetInt32(0);
+                    var manifestJson = policyReader.GetString(1);
+                    using var manifest = JsonDocument.Parse(manifestJson);
+                    var manifestRoot = manifest.RootElement;
+
+                    if (manifestRoot.TryGetProperty("required_policy", out var requiredPolicy))
+                    {
+                        if (requiredPolicy.ValueKind != JsonValueKind.Array ||
+                            requiredPolicy.EnumerateArray().Any(x => x.ValueKind != JsonValueKind.String))
+                        {
+                            return Results.Json(
+                                new { status = "error", code = "action.contract_violation", message = "invalid required_policy in manifest", meta = new { correlationId, actionVersion = effectiveVersion ?? version } },
+                                statusCode: 500);
+                        }
+
+                        var requiredScopes = requiredPolicy
+                            .EnumerateArray()
+                            .Select(x => x.GetString()!)
+                            .ToHashSet(StringComparer.Ordinal);
+
+                        if (!requiredScopes.IsSubsetOf(scopes))
+                        {
+                            return Results.Json(
+                                new { status = "error", code = "access.denied", message = "missing required scope", meta = new { correlationId, actionVersion = effectiveVersion ?? version } },
+                                statusCode: 403);
+                        }
+                    }
+                }
+            }
+            catch (NpgsqlException)
+            {
+                return Results.Json(
+                    new { status = "error", code = "dependency.unavailable", message = "database unavailable", meta = new { correlationId } },
+                    statusCode: 503);
+            }
 
             var context = new System.Text.Json.Nodes.JsonObject
             {

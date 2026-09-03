@@ -156,18 +156,20 @@ internal static class ManifestParser
             if (!root.TryGetProperty(
                     "request_schema",
                     out var requestSchema) ||
-                requestSchema.ValueKind != JsonValueKind.Object)
+                requestSchema.ValueKind != JsonValueKind.Object ||
+                !HasDraft202012Marker(requestSchema))
             {
-                error = "missing or invalid request_schema";
+                error = "request_schema must be an object with $schema draft 2020-12";
                 return false;
             }
 
             if (!root.TryGetProperty(
                     "response_schema",
                     out var responseSchema) ||
-                responseSchema.ValueKind != JsonValueKind.Object)
+                responseSchema.ValueKind != JsonValueKind.Object ||
+                !HasDraft202012Marker(responseSchema))
             {
-                error = "missing or invalid response_schema";
+                error = "response_schema must be an object with $schema draft 2020-12";
                 return false;
             }
 
@@ -251,4 +253,11 @@ internal static class ManifestParser
             return true;
         }
     }
+    private static bool HasDraft202012Marker(JsonElement schema)
+    {
+        return schema.TryGetProperty("$schema", out var marker) &&
+               marker.ValueKind == JsonValueKind.String &&
+               marker.GetString() == "https://json-schema.org/draft/2020-12/schema";
+    }
+
 }

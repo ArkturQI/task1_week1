@@ -162,10 +162,13 @@ GRANT SELECT, INSERT, UPDATE, DELETE
 ON autocheck.contract_info,
    autocheck.action_definitions,
    autocheck.action_dispatches,
-   autocheck.operations,
-   autocheck.operation_events,
    autocheck.idempotency_claims
 TO course_api;
+
+REVOKE INSERT, UPDATE, DELETE
+ON autocheck.operations,
+   autocheck.operation_events
+FROM course_api;
 
 GRANT USAGE, SELECT
 ON ALL SEQUENCES IN SCHEMA autocheck

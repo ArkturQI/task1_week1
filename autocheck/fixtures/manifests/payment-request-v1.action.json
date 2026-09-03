@@ -6,14 +6,24 @@
   "target_schema": "api",
   "target_function": "payment_request",
   "request_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
-    "required": [ "operationKind", "amount", "currency" ],
+    "required": [
+      "operationKind",
+      "amount",
+      "currency"
+    ],
     "properties": {
       "operationKind": {
         "type": "string",
-        "enum": [ "PAYMENT_EXECUTION", "PAYMENT_APPROVAL" ]
+        "enum": [
+          "PAYMENT_EXECUTION",
+          "PAYMENT_APPROVAL"
+        ]
       },
-      "amount": { "type": "string" },
+      "amount": {
+        "type": "string"
+      },
       "currency": {
         "type": "string",
         "const": "RUB"
@@ -22,20 +32,44 @@
     "additionalProperties": false
   },
   "response_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
-    "required": [ "operationId", "requestId", "operationKind", "amount", "currency", "status" ],
+    "required": [
+      "operationId",
+      "requestId",
+      "operationKind",
+      "amount",
+      "currency",
+      "status"
+    ],
     "properties": {
-      "operationId": { "type": "string" },
-      "requestId": { "type": "string" },
-      "operationKind": { "type": "string" },
-      "amount": { "type": "string" },
-      "currency": { "type": "string" },
-      "status": { "type": "string" }
+      "operationId": {
+        "type": "string"
+      },
+      "requestId": {
+        "type": "string"
+      },
+      "operationKind": {
+        "type": "string"
+      },
+      "amount": {
+        "type": "string"
+      },
+      "currency": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      }
     },
     "additionalProperties": false
   },
-  "outcomes": [ "CREATED" ],
-  "required_policy": [ "payment:write" ],
+  "outcomes": [
+    "CREATED"
+  ],
+  "required_policy": [
+    "payment:write"
+  ],
   "idempotency_mode": "required",
   "idempotency_scope": "principal_action",
   "timeout_ms": 10000

@@ -147,9 +147,17 @@ internal static class ActionCommands
             // Grant only the minimum privileges required for the exact target.
             await using var targetExists = new NpgsqlCommand(
                 """
-                SELECT to_regprocedure(
-                    format('%I.%I(jsonb,jsonb)', @schema, @function)
-                ) IS NOT NULL
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_proc p
+                    JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname = @schema
+                      AND p.proname = @function
+                      AND p.pronargs = 2
+                      AND p.proargtypes[0] = 'jsonb'::regtype::oid
+                      AND p.proargtypes[1] = 'jsonb'::regtype::oid
+                      AND p.prorettype = 'jsonb'::regtype
+                )
                 """,
                 conn,
                 tx);
@@ -167,7 +175,7 @@ internal static class ActionCommands
                 Console.WriteLine(
                     Envelope.Error(
                         "action.target_not_found",
-                        $"target function {m.TargetSchema}.{m.TargetFunction}(jsonb,jsonb) not found"));
+                        $"target function {m.TargetSchema}.{m.TargetFunction}(jsonb,jsonb) returning jsonb not found"));
 
                 return 1;
             }

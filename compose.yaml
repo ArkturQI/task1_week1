@@ -135,10 +135,6 @@ services:
         TO course_migration_login
         WITH ADMIN OPTION;
 
-        GRANT api_owner
-        TO course_cli_login
-        WITH ADMIN OPTION;
-
         GRANT course_runtime
         TO course_api_login;
 

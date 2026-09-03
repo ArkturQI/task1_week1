@@ -11,6 +11,7 @@ FROM (SELECT $${
   "target_schema": "api",
   "target_function": "payment_request",
   "request_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "additionalProperties": false,
     "required": ["operationKind", "amount", "currency"],
@@ -21,6 +22,7 @@ FROM (SELECT $${
     }
   },
   "response_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "additionalProperties": false,
     "required": ["operationId", "requestId", "operationKind", "amount", "currency", "status"],
@@ -56,6 +58,7 @@ FROM (SELECT $${
   "target_schema": "api",
   "target_function": "operation_get",
   "request_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "additionalProperties": false,
     "required": ["operationId"],
@@ -64,6 +67,7 @@ FROM (SELECT $${
     }
   },
   "response_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "additionalProperties": false,
     "required": ["operationId", "requestId", "operationKind", "amount", "currency", "status"],
