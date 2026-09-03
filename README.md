@@ -1,4 +1,4 @@
-# moduledev-runtime
+# Moduldev-Runtime 
 
 Database-first runtime для динамически публикуемых actions. Клиент выбирает только маршрут action и передаёт payload; `schema`, `target function`, SQL и policy определяются сервером из опубликованного catalog.
 
