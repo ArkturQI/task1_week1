@@ -5,7 +5,7 @@
 ### Containers
 
 1. **Client** (External) - HTTP client
-2. **Gateway** (C# ASP.NET Core, :8080) - JWT validation, proxy to Api
+2. **Gateway** (C# ASP.NET Core, :8080) - route whitelist, proxy to Api (JWT is validated by Api, see ADR-001)
 3. **Api** (C# ASP.NET Core, internal :8080) - Action runtime, calls api.invoke in PostgreSQL
 4. **Cli** (C# Console) - Migration apply, action publish/list/activate/disable
 5. **PostgreSQL** (:5432) - Authoritative state storage
